@@ -1,7 +1,3 @@
-# app.py
-# MQTT + Streamlit + browser voice output
-# Remote control of ESP8266 D1/D2 pins – no laptop required after deployment
-
 import streamlit as st
 import paho.mqtt.client as mqtt
 import time
@@ -12,7 +8,7 @@ import time
 BROKER = "broker.hivemq.com"
 PORT   = 1883
 
-# Change "ravi2025" to your own unique string (for privacy)
+# Change "ravi2025" to your own unique string for privacy
 TOPIC_D1     = "ravi2025/home/d1/set"
 TOPIC_D2     = "ravi2025/home/d2/set"
 TOPIC_STATUS = "ravi2025/home/status"
@@ -22,6 +18,10 @@ if "client" not in st.session_state:
     st.session_state.client = None
 if "status" not in st.session_state:
     st.session_state.status = "Connecting to MQTT broker..."
+
+# Previous status – used to detect changes and speak only when needed
+if "prev_status" not in st.session_state:
+    st.session_state.prev_status = ""
 
 # ────────────────────────────────────────────────
 # MQTT callbacks
@@ -33,8 +33,10 @@ def on_connect(client, userdata, flags, rc):
 def on_message(client, userdata, msg):
     new_status = msg.payload.decode().strip()
     st.session_state.status = new_status
-    # Speak the new status using browser TTS
-    speak_browser(new_status)
+    # Speak only if status actually changed
+    if new_status != st.session_state.prev_status:
+        speak_browser(new_status)
+        st.session_state.prev_status = new_status
     st.rerun()
 
 # Connect once
@@ -47,7 +49,7 @@ if st.session_state.client is None:
     st.session_state.client = client
 
 # ────────────────────────────────────────────────
-# Browser TTS – speaks text aloud on client side
+# Browser TTS – speaks text aloud in the user's browser
 # ────────────────────────────────────────────────
 def speak_browser(text: str):
     if not text:
@@ -102,7 +104,7 @@ with col4:
 
 st.markdown("---")
 
-st.subheader("Latest status from ESP (also spoken aloud)")
+st.subheader("Latest status from ESP (spoken aloud when changed)")
 st.code(st.session_state.status)
 
 # Optional manual refresh
@@ -110,7 +112,8 @@ if st.button("Refresh status"):
     st.rerun()
 
 st.info("""
-Voice output works in most modern browsers (Chrome, Edge, Safari).  
-The app speaks status changes automatically (e.g. "D1 ON", "D2 OFF").
-Voice input (microphone) is not included — it is unreliable on Streamlit Cloud.
+Voice output is automatic:
+• When ESP sends "D1 ON", "D2 OFF", etc., the browser will speak it aloud.
+• Works in most browsers (Chrome/Edge best, Safari sometimes needs user interaction first).
+• No microphone needed — only output (speaking).
 """)
