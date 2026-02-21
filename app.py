@@ -1,135 +1,137 @@
-#include <ESP8266WiFi.h>
-#include <PubSubClient.h>
+import streamlit as st
+import paho.mqtt.client as mqtt
+import time
 
-const char* ssid = "Airtel_56";
-const char* password = "Raviuma5658";
+# ────────────────────────────────────────────────
+# CONFIG – MQTT public broker
+# ────────────────────────────────────────────────
+BROKER = "broker.hivemq.com"
+PORT   = 1883
 
-const char* mqtt_server = "broker.hivemq.com";
-const int   mqtt_port   = 1883;
+# Make sure these match EXACTLY with your ESP code (case-sensitive!)
+TOPIC_D1     = "ravi2025/home/d1/set"
+TOPIC_D2     = "ravi2025/home/d2/set"
+TOPIC_STATUS = "ravi2025/home/status"
 
-const char* topic_d1     = "ravi2025/home/d1/set";
-const char* topic_d2     = "ravi2025/home/d2/set";
-const char* topic_status = "ravi2025/home/status";
+# Session state
+if "client" not in st.session_state:
+    st.session_state.client = None
+if "status" not in st.session_state:
+    st.session_state.status = "Initializing MQTT connection..."
+if "last_spoken" not in st.session_state:
+    st.session_state.last_spoken = ""
 
-WiFiClient espClient;
-PubSubClient client(espClient);
+# ────────────────────────────────────────────────
+# MQTT callbacks
+# ────────────────────────────────────────────────
+def on_connect(client, userdata, flags, rc):
+    client.subscribe(TOPIC_STATUS)
+    new_msg = "Connected to broker – waiting for ESP"
+    st.session_state.status = new_msg
+    speak_browser(new_msg)
 
-#define D1_PIN 5
-#define D2_PIN 4
+def on_message(client, userdata, msg):
+    new_status = msg.payload.decode().strip()
+    st.session_state.status = new_status
+    speak_browser(new_status)
+    st.rerun()
 
-unsigned long lastReconnectAttempt = 0;
+# Connect once
+if st.session_state.client is None:
+    client = mqtt.Client()
+    client.on_connect = on_connect
+    client.on_message = on_message
+    try:
+        client.connect(BROKER, PORT, 60)
+        client.loop_start()
+        st.session_state.client = client
+    except Exception as e:
+        st.session_state.status = f"Connection failed: {str(e)}"
 
-void setup() {
-  Serial.begin(115200);
-  delay(100);
-  Serial.println("\n\n=== ESP8266 MQTT Debug Start ===");
+# ────────────────────────────────────────────────
+# Browser TTS – speaks text aloud
+# ────────────────────────────────────────────────
+def speak_browser(text: str):
+    if not text or text == st.session_state.last_spoken:
+        return
+    st.session_state.last_spoken = text
+    safe_text = text.replace('"', '\\"').replace("'", "\\'")
+    js = f"""
+    <script>
+    if ('speechSynthesis' in window) {{
+        const utterance = new SpeechSynthesisUtterance("{safe_text}");
+        utterance.lang = 'en-US';
+        utterance.volume = 1.0;
+        utterance.rate = 0.95;
+        utterance.pitch = 1.0;
+        window.speechSynthesis.speak(utterance);
+    }}
+    </script>
+    """
+    st.components.v1.html(js, height=0)
 
-  pinMode(D1_PIN, OUTPUT);
-  pinMode(D2_PIN, OUTPUT);
-  digitalWrite(D1_PIN, LOW);
-  digitalWrite(D2_PIN, LOW);
+# ────────────────────────────────────────────────
+# UI
+# ────────────────────────────────────────────────
+st.set_page_config(page_title="ESP8266 Remote + Voice", layout="wide")
 
-  setup_wifi();
-  client.setServer(mqtt_server, mqtt_port);
-  client.setCallback(callback);
-}
+st.title("ESP8266 D1 / D2 Remote Control")
+st.caption(f"Broker: {BROKER}  |  Status: {st.session_state.status}")
 
-void setup_wifi() {
-  Serial.print("Connecting to WiFi: ");
-  Serial.println(ssid);
+st.markdown("---")
 
-  WiFi.begin(ssid, password);
+col1, col2, col3, col4 = st.columns(4)
 
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
-  }
+with col1:
+    if st.button("D1 ON", use_container_width=True, type="primary"):
+        if st.session_state.client:
+            st.session_state.client.publish(TOPIC_D1, "ON")
+            msg = "Sent command: D1 ON"
+            st.session_state.status = msg
+            speak_browser(msg)
+        else:
+            st.error("MQTT not connected yet")
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWiFi connected!");
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
-    Serial.print("Signal strength (RSSI): ");
-    Serial.println(WiFi.RSSI());
-  } else {
-    Serial.println("\nWiFi connection FAILED after 15 seconds!");
-  }
-}
+with col2:
+    if st.button("D1 OFF", use_container_width=True):
+        if st.session_state.client:
+            st.session_state.client.publish(TOPIC_D1, "OFF")
+            msg = "Sent command: D1 OFF"
+            st.session_state.status = msg
+            speak_browser(msg)
+        else:
+            st.error("MQTT not connected yet")
 
-void reconnect() {
-  if (millis() - lastReconnectAttempt < 5000) {
-    return;  # Don't spam reconnect
-  }
-  lastReconnectAttempt = millis();
+with col3:
+    if st.button("D2 ON", use_container_width=True, type="primary"):
+        if st.session_state.client:
+            st.session_state.client.publish(TOPIC_D2, "ON")
+            msg = "Sent command: D2 ON"
+            st.session_state.status = msg
+            speak_browser(msg)
+        else:
+            st.error("MQTT not connected yet")
 
-  Serial.print("Attempting MQTT connection to ");
-  Serial.print(mqtt_server);
-  Serial.print(":");
-  Serial.print(mqtt_port);
-  Serial.print(" ... ");
+with col4:
+    if st.button("D2 OFF", use_container_width=True):
+        if st.session_state.client:
+            st.session_state.client.publish(TOPIC_D2, "OFF")
+            msg = "Sent command: D2 OFF"
+            st.session_state.status = msg
+            speak_browser(msg)
+        else:
+            st.error("MQTT not connected yet")
 
-  String clientId = "ESP8266Client-" + String(random(0xffff), HEX);
-  if (client.connect(clientId.c_str())) {
-    Serial.println("CONNECTED!");
-    client.subscribe(topic_d1);
-    client.subscribe(topic_d2);
-    client.publish(topic_status, "ESP online - MQTT connected");
-    Serial.println("Published: ESP online - MQTT connected");
-  } else {
-    Serial.print("FAILED, rc=");
-    Serial.print(client.state());
-    Serial.println(" → will retry in 5 seconds");
-    // Common rc values:
-    // -2 = network error
-    // -4 = timeout
-    // 5 = unauthorized (not for public broker)
-  }
-}
+st.markdown("---")
 
-void callback(char* topic, byte* payload, unsigned int length) {
-  String message = "";
-  for (unsigned int i = 0; i < length; i++) {
-    message += (char)payload[i];
-  }
-  message.trim();
+st.subheader("Latest status from ESP (spoken aloud when changed)")
+st.code(st.session_state.status)
 
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  Serial.println(message);
+if st.button("Test Voice Output"):
+    speak_browser("Hello Ravi! This is a test of voice output. D1 on, D2 off.")
 
-  String t = String(topic);
-
-  if (t == topic_d1) {
-    if (message == "ON") {
-      digitalWrite(D1_PIN, HIGH);
-      client.publish(topic_status, "D1 ON");
-      Serial.println("D1 turned ON");
-    } else if (message == "OFF") {
-      digitalWrite(D1_PIN, LOW);
-      client.publish(topic_status, "D1 OFF");
-      Serial.println("D1 turned OFF");
-    }
-  }
-  else if (t == topic_d2) {
-    if (message == "ON") {
-      digitalWrite(D2_PIN, HIGH);
-      client.publish(topic_status, "D2 ON");
-      Serial.println("D2 turned ON");
-    } else if (message == "OFF") {
-      digitalWrite(D2_PIN, LOW);
-      client.publish(topic_status, "D2 OFF");
-      Serial.println("D2 turned OFF");
-    }
-  }
-}
-
-void loop() {
-  if (!client.connected()) {
-    reconnect();
-  }
-  client.loop();
-}
-
+st.info("""
+Voice output is automatic when status changes or buttons are pressed.
+Works best in Chrome/Edge. Safari may need page interaction first.
+No microphone needed — only speaking.
+""")
