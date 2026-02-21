@@ -60,7 +60,7 @@ void setup_wifi() {
 
 void reconnect() {
   if (millis() - lastReconnectAttempt < 5000) {
-    return;  
+    return;  // Don't spam reconnect
   }
   lastReconnectAttempt = millis();
 
@@ -132,4 +132,3 @@ void loop() {
   }
   client.loop();
 }
-
