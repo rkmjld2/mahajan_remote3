@@ -3,12 +3,12 @@ import paho.mqtt.client as mqtt
 import time
 
 # ────────────────────────────────────────────────
-# CONFIG – Websocket broker (works reliably on Streamlit Cloud)
+# CONFIG
 # ────────────────────────────────────────────────
-BROKER = "broker.emqx.io"
-PORT   = 1883  # or 443 for wss (websocket)
-TRANSPORT = "websockets"  # Important for cloud
+BROKER = "broker.hivemq.com"
+PORT   = 1883
 
+# Change this prefix to something unique
 TOPIC_D1     = "ravi2025/home/d1/set"
 TOPIC_D2     = "ravi2025/home/d2/set"
 TOPIC_STATUS = "ravi2025/home/status"
@@ -17,71 +17,39 @@ TOPIC_STATUS = "ravi2025/home/status"
 if "client" not in st.session_state:
     st.session_state.client = None
 if "status" not in st.session_state:
-    st.session_state.status = "Starting..."
-if "pin_d1" not in st.session_state:
-    st.session_state.pin_d1 = "UNKNOWN"
-if "pin_d2" not in st.session_state:
-    st.session_state.pin_d2 = "UNKNOWN"
-if "debug_log" not in st.session_state:
-    st.session_state.debug_log = "Debug log:\n"
-
-# Add debug
-st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] App rerun\n"
+    st.session_state.status = "Waiting for connection to broker..."
+if "last_real_status" not in st.session_state:
+    st.session_state.last_real_status = "No status received yet"
 
 # ────────────────────────────────────────────────
 # MQTT callbacks
 # ────────────────────────────────────────────────
 def on_connect(client, userdata, flags, rc):
-    st.session_state.status = f"Connected (rc={rc})"
-    st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Connected (rc={rc})\n"
     client.subscribe(TOPIC_STATUS)
-    st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Subscribed to {TOPIC_STATUS}\n"
-    client.publish(TOPIC_STATUS, "App connected - request status")
-    st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Requested status\n"
-    st.rerun()
+    st.session_state.status = "Connected to broker – waiting for ESP"
 
 def on_message(client, userdata, msg):
     new_status = msg.payload.decode().strip()
-    st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Received on {msg.topic}: '{new_status}'\n"
-    st.session_state.status = f"Received from ESP: {new_status}"
-    
-    if "D1 ON" in new_status or "D1:ON" in new_status:
-        st.session_state.pin_d1 = "ON"
-        speak_browser("D1 is on")
-    elif "D1 OFF" in new_status or "D1:OFF" in new_status:
-        st.session_state.pin_d1 = "OFF"
-        speak_browser("D1 is off")
-    
-    if "D2 ON" in new_status or "D2:ON" in new_status:
-        st.session_state.pin_d2 = "ON"
-        speak_browser("D2 is on")
-    elif "D2 OFF" in new_status or "D2:OFF" in new_status:
-        st.session_state.pin_d2 = "OFF"
-        speak_browser("D2 is off")
-    
+    # Only update and speak real status from ESP
+    st.session_state.last_real_status = new_status
+    st.session_state.status = f"ESP reports: {new_status}"
+    speak_browser(new_status)
     st.rerun()
 
-# Connect
+# Connect once
 if st.session_state.client is None:
-    client = mqtt.Client(client_id=f"streamlit_ravi_{int(time.time())}", transport=TRANSPORT)
+    client = mqtt.Client()
     client.on_connect = on_connect
     client.on_message = on_message
     try:
         client.connect(BROKER, PORT, 60)
         client.loop_start()
         st.session_state.client = client
-        st.session_state.status = "Connecting..."
     except Exception as e:
-        st.session_state.status = f"Connect failed: {str(e)}"
-        st.session_state.debug_log += f"Connect error: {str(e)}\n"
-
-# Force resubscribe
-if st.session_state.client is not None and st.session_state.client.is_connected():
-    st.session_state.client.subscribe(TOPIC_STATUS)
-    st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Resubscribed\n"
+        st.session_state.status = f"Connection failed: {str(e)}"
 
 # ────────────────────────────────────────────────
-# Browser TTS
+# Browser TTS – speaks only real status changes
 # ────────────────────────────────────────────────
 def speak_browser(text: str):
     if not text:
@@ -115,56 +83,46 @@ col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     if st.button("D1 ON", use_container_width=True, type="primary"):
-        if st.session_state.client and st.session_state.client.is_connected():
+        if st.session_state.client:
             st.session_state.client.publish(TOPIC_D1, "ON")
-            st.session_state.status = "Sent D1 ON – waiting for ESP reply"
-            speak_browser("D1 command sent")
+            st.session_state.status = "Command sent: D1 ON → waiting for ESP reply"
         else:
-            st.error("MQTT not connected – check debug log")
+            st.error("MQTT client not connected")
 
 with col2:
     if st.button("D1 OFF", use_container_width=True):
-        if st.session_state.client and st.session_state.client.is_connected():
+        if st.session_state.client:
             st.session_state.client.publish(TOPIC_D1, "OFF")
-            st.session_state.status = "Sent D1 OFF – waiting for ESP reply"
-            speak_browser("D1 command sent")
+            st.session_state.status = "Command sent: D1 OFF → waiting for ESP reply"
         else:
-            st.error("MQTT not connected – check debug log")
+            st.error("MQTT client not connected")
 
 with col3:
     if st.button("D2 ON", use_container_width=True, type="primary"):
-        if st.session_state.client and st.session_state.client.is_connected():
+        if st.session_state.client:
             st.session_state.client.publish(TOPIC_D2, "ON")
-            st.session_state.status = "Sent D2 ON – waiting for ESP reply"
-            speak_browser("D2 command sent")
+            st.session_state.status = "Command sent: D2 ON → waiting for ESP reply"
         else:
-            st.error("MQTT not connected – check debug log")
+            st.error("MQTT client not connected")
 
 with col4:
     if st.button("D2 OFF", use_container_width=True):
-        if st.session_state.client and st.session_state.client.is_connected():
+        if st.session_state.client:
             st.session_state.client.publish(TOPIC_D2, "OFF")
-            st.session_state.status = "Sent D2 OFF – waiting for ESP reply"
-            speak_browser("D2 command sent")
+            st.session_state.status = "Command sent: D2 OFF → waiting for ESP reply"
         else:
-            st.error("MQTT not connected – check debug log")
+            st.error("MQTT client not connected")
 
 st.markdown("---")
 
-st.subheader("Current Pin Status from ESP")
-if st.session_state.last_update_time:
-    st.caption(f"Last update: {st.session_state.last_update_time}")
-st.metric("D1", st.session_state.pin_d1)
-st.metric("D2", st.session_state.pin_d2)
-
-st.subheader("Debug Log (last 500 chars)")
-st.code(st.session_state.debug_log[-500:] if st.session_state.debug_log else "No debug info yet")
-
-st.subheader("Voice Test")
-if st.button("Test Voice"):
-    speak_browser("Hello! Voice test successful. D1 on, D2 off.")
+st.subheader("Real status from ESP (updated & spoken only when received)")
+st.code(st.session_state.last_real_status if st.session_state.last_real_status else "No status received yet")
 
 st.info("""
-• Voice speaks on command sent + when ESP replies with status
-• If status stays UNKNOWN → check debug log for "Subscribed to..." and "Received on..."
+• Voice speaks **only** when ESP actually replies
+• If ESP is off → buttons send command but no voice/status update occurs
+• Press buttons → wait 2–5 seconds → if ESP is on, you will hear the real status
 """)
+
+if st.button("Test Voice (browser check)"):
+    speak_browser("Hello! This is a test of voice output.")
