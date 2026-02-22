@@ -1,22 +1,23 @@
 import streamlit as st
 import paho.mqtt.client as mqtt
 import time
+import threading
 
 # ────────────────────────────────────────────────
-# CONFIG – MUST MATCH ESP SERIAL EXACTLY
+# CONFIG – MUST MATCH ESP EXACTLY
 # ────────────────────────────────────────────────
 BROKER = "broker.hivemq.com"
 PORT   = 1883
 
 TOPIC_D1     = "ravi2025/home/d1/set"
 TOPIC_D2     = "ravi2025/home/d2/set"
-TOPIC_STATUS = "ravi2025/home/status"   # Copy from Serial "Subscribed to:" line
+TOPIC_STATUS = "ravi2025/home/status"
 
 # Session state
 if "client" not in st.session_state:
     st.session_state.client = None
 if "status" not in st.session_state:
-    st.session_state.status = "Starting..."
+    st.session_state.status = "Not connected"
 if "pin_d1" not in st.session_state:
     st.session_state.pin_d1 = "UNKNOWN"
 if "pin_d2" not in st.session_state:
@@ -24,28 +25,24 @@ if "pin_d2" not in st.session_state:
 if "debug_log" not in st.session_state:
     st.session_state.debug_log = "Debug log:\n"
 
-# Add debug on every rerun
-st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] App rerun started\n"
-
 # ────────────────────────────────────────────────
-# MQTT callbacks with heavy debug
+# MQTT callbacks
 # ────────────────────────────────────────────────
 def on_connect(client, userdata, flags, rc):
-    msg = f"Connected (rc={rc})"
-    st.session_state.status = msg
-    st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] {msg}\n"
+    st.session_state.status = f"Connected (rc={rc})"
+    st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Connected (rc={rc})\n"
     client.subscribe(TOPIC_STATUS)
     st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Subscribed to {TOPIC_STATUS}\n"
     client.publish(TOPIC_STATUS, "App connected - request status")
-    st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Requested status from ESP\n"
+    st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Requested status\n"
+    st.rerun()
 
 def on_message(client, userdata, msg):
-    received_time = time.strftime("%H:%M:%S")
     new_status = msg.payload.decode().strip()
-    st.session_state.debug_log += f"[{received_time}] Received on {msg.topic}: '{new_status}'\n"
-    st.session_state.status = f"Received from ESP: {new_status} ({received_time})"
+    st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Received on {msg.topic}: '{new_status}'\n"
+    st.session_state.status = f"Received from ESP: {new_status}"
     
-    # Parse pins and speak
+    # Parse and speak
     if "D1 ON" in new_status or "D1:ON" in new_status:
         st.session_state.pin_d1 = "ON"
         speak_browser("D1 is on")
@@ -62,25 +59,25 @@ def on_message(client, userdata, msg):
     
     st.rerun()
 
-# Connect & resubscribe on every rerun
+def mqtt_loop():
+    if st.session_state.client:
+        st.session_state.client.loop_forever(retry_first_connection=True)
+
+# Connect once with thread
 if st.session_state.client is None:
     client = mqtt.Client(client_id=f"streamlit_ravi_{int(time.time())}")
     client.on_connect = on_connect
     client.on_message = on_message
     try:
         client.connect(BROKER, PORT, 60)
-        client.loop_start()
         st.session_state.client = client
         st.session_state.status = "Connecting..."
-        st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Connecting...\n"
+        # Start MQTT loop in background thread
+        threading.Thread(target=mqtt_loop, daemon=True).start()
+        st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] MQTT thread started\n"
     except Exception as e:
         st.session_state.status = f"Connect failed: {str(e)}"
         st.session_state.debug_log += f"Connect error: {str(e)}\n"
-else:
-    # Force resubscribe on every rerun if connected
-    if st.session_state.client.is_connected():
-        st.session_state.client.subscribe(TOPIC_STATUS)
-        st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Resubscribed to {TOPIC_STATUS}\n"
 
 # ────────────────────────────────────────────────
 # Browser TTS
@@ -122,7 +119,7 @@ with col1:
             st.session_state.status = "Sent D1 ON – waiting for ESP reply"
             speak_browser("D1 command sent")
         else:
-            st.error("MQTT not connected")
+            st.error("MQTT not connected – check debug log")
 
 with col2:
     if st.button("D1 OFF", use_container_width=True):
@@ -131,7 +128,7 @@ with col2:
             st.session_state.status = "Sent D1 OFF – waiting for ESP reply"
             speak_browser("D1 command sent")
         else:
-            st.error("MQTT not connected")
+            st.error("MQTT not connected – check debug log")
 
 with col3:
     if st.button("D2 ON", use_container_width=True, type="primary"):
@@ -140,7 +137,7 @@ with col3:
             st.session_state.status = "Sent D2 ON – waiting for ESP reply"
             speak_browser("D2 command sent")
         else:
-            st.error("MQTT not connected")
+            st.error("MQTT not connected – check debug log")
 
 with col4:
     if st.button("D2 OFF", use_container_width=True):
@@ -149,7 +146,7 @@ with col4:
             st.session_state.status = "Sent D2 OFF – waiting for ESP reply"
             speak_browser("D2 command sent")
         else:
-            st.error("MQTT not connected")
+            st.error("MQTT not connected – check debug log")
 
 st.markdown("---")
 
@@ -166,8 +163,15 @@ st.subheader("Voice Test")
 if st.button("Test Voice"):
     speak_browser("Hello! Voice test successful. D1 on, D2 off.")
 
+# Manual reconnect button
+if st.button("Reconnect MQTT"):
+    if st.session_state.client:
+        st.session_state.client.disconnect()
+    st.session_state.client = None
+    st.rerun()
+
 st.info("""
 • Voice speaks on command sent + when ESP replies with status
-• If status stays UNKNOWN → ESP publish not reaching app
-• Check debug log for "Subscribed to..." and "Received on..."
+• If status stays UNKNOWN → check debug log for "Subscribed to..." and "Received on..."
+• If "Connect failed" or no "Connected" in debug → cloud network issue
 """)
