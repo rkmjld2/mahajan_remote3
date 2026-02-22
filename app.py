@@ -3,12 +3,12 @@ import paho.mqtt.client as mqtt
 import time
 
 # ────────────────────────────────────────────────
-# CONFIG – MQTT public broker
+# CONFIG
 # ────────────────────────────────────────────────
 BROKER = "broker.hivemq.com"
 PORT   = 1883
 
-# Make sure these match EXACTLY with your ESP code (case-sensitive!)
+# MUST match exactly with ESP code (case-sensitive!)
 TOPIC_D1     = "ravi2025/home/d1/set"
 TOPIC_D2     = "ravi2025/home/d2/set"
 TOPIC_STATUS = "ravi2025/home/status"
@@ -17,35 +17,41 @@ TOPIC_STATUS = "ravi2025/home/status"
 if "client" not in st.session_state:
     st.session_state.client = None
 if "status" not in st.session_state:
-    st.session_state.status = "Initializing MQTT connection..."
+    st.session_state.status = "Initializing..."
 if "pin_d1" not in st.session_state:
     st.session_state.pin_d1 = "UNKNOWN"
 if "pin_d2" not in st.session_state:
     st.session_state.pin_d2 = "UNKNOWN"
+if "last_update_time" not in st.session_state:
+    st.session_state.last_update_time = None
 
 # ────────────────────────────────────────────────
 # MQTT callbacks
 # ────────────────────────────────────────────────
 def on_connect(client, userdata, flags, rc):
     client.subscribe(TOPIC_STATUS)
-    st.session_state.status = "Connected to broker – waiting for ESP"
+    st.session_state.status = "Connected to broker – waiting for ESP reply"
 
 def on_message(client, userdata, msg):
     new_status = msg.payload.decode().strip()
-    st.session_state.status = f"ESP reports: {new_status}"
-    # Parse pin status and speak
-    if "D1 ON" in new_status:
+    st.session_state.last_update_time = time.strftime("%H:%M:%S")
+    st.session_state.status = f"Received from ESP: {new_status}"
+    
+    # Parse pin status
+    if "D1 ON" in new_status or "D1:ON" in new_status:
         st.session_state.pin_d1 = "ON"
         speak_browser("D1 is on")
-    elif "D1 OFF" in new_status:
+    elif "D1 OFF" in new_status or "D1:OFF" in new_status:
         st.session_state.pin_d1 = "OFF"
         speak_browser("D1 is off")
-    if "D2 ON" in new_status:
+    
+    if "D2 ON" in new_status or "D2:ON" in new_status:
         st.session_state.pin_d2 = "ON"
         speak_browser("D2 is on")
-    elif "D2 OFF" in new_status:
+    elif "D2 OFF" in new_status or "D2:OFF" in new_status:
         st.session_state.pin_d2 = "OFF"
         speak_browser("D2 is off")
+    
     st.rerun()
 
 # Connect once
@@ -61,7 +67,7 @@ if st.session_state.client is None:
         st.session_state.status = f"Connection failed: {str(e)}"
 
 # ────────────────────────────────────────────────
-# Browser TTS – speaks pin status
+# Browser TTS
 # ────────────────────────────────────────────────
 def speak_browser(text: str):
     if not text:
@@ -98,37 +104,49 @@ with col1:
         if st.session_state.client:
             st.session_state.client.publish(TOPIC_D1, "ON")
             st.session_state.status = "Command sent: D1 ON → waiting for ESP reply"
+        else:
+            st.error("MQTT not connected")
 
 with col2:
     if st.button("D1 OFF", use_container_width=True):
         if st.session_state.client:
             st.session_state.client.publish(TOPIC_D1, "OFF")
             st.session_state.status = "Command sent: D1 OFF → waiting for ESP reply"
+        else:
+            st.error("MQTT not connected")
 
 with col3:
     if st.button("D2 ON", use_container_width=True, type="primary"):
         if st.session_state.client:
             st.session_state.client.publish(TOPIC_D2, "ON")
             st.session_state.status = "Command sent: D2 ON → waiting for ESP reply"
+        else:
+            st.error("MQTT not connected")
 
 with col4:
     if st.button("D2 OFF", use_container_width=True):
         if st.session_state.client:
             st.session_state.client.publish(TOPIC_D2, "OFF")
             st.session_state.status = "Command sent: D2 OFF → waiting for ESP reply"
+        else:
+            st.error("MQTT not connected")
 
 st.markdown("---")
 
-st.subheader("Current Pin Status (from ESP)")
-st.write(f"D1: {st.session_state.pin_d1}")
-st.write(f"D2: {st.session_state.pin_d2}")
+st.subheader("Current Pin Status from ESP")
+if st.session_state.last_update_time:
+    st.caption(f"Last update: {st.session_state.last_update_time}")
+else:
+    st.caption("No status received yet")
+st.metric("D1", st.session_state.pin_d1)
+st.metric("D2", st.session_state.pin_d2)
 
 st.subheader("Voice Output Test")
 if st.button("Test Voice"):
-    speak_browser("Hello! This is a test of voice output. D1 on, D2 off.")
+    speak_browser("Hello Ravi! Voice test successful. D1 on, D2 off.")
 
 st.info("""
-• Voice speaks only when ESP replies with pin status (e.g. "D1 is on", "D2 is off").
-• If ESP is off → no voice and status remains "UNKNOWN" (command sent but no reply).
-• Pin status shows current ON/OFF from ESP (updated only on reply).
+Voice & pin status update only when ESP replies.
+If pins change but status stays UNKNOWN → ESP is not publishing to topic: {TOPIC_STATUS}
+Check Serial Monitor for "Published:" messages.
 """)
