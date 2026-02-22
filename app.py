@@ -1,13 +1,13 @@
 import streamlit as st
 import paho.mqtt.client as mqtt
 import time
-import threading
 
 # ────────────────────────────────────────────────
-# CONFIG – MUST MATCH ESP EXACTLY
+# CONFIG – Websocket broker (works reliably on Streamlit Cloud)
 # ────────────────────────────────────────────────
-BROKER = "broker.hivemq.com"
-PORT   = 1883
+BROKER = "broker.emqx.io"
+PORT   = 1883  # or 443 for wss (websocket)
+TRANSPORT = "websockets"  # Important for cloud
 
 TOPIC_D1     = "ravi2025/home/d1/set"
 TOPIC_D2     = "ravi2025/home/d2/set"
@@ -17,13 +17,16 @@ TOPIC_STATUS = "ravi2025/home/status"
 if "client" not in st.session_state:
     st.session_state.client = None
 if "status" not in st.session_state:
-    st.session_state.status = "Not connected"
+    st.session_state.status = "Starting..."
 if "pin_d1" not in st.session_state:
     st.session_state.pin_d1 = "UNKNOWN"
 if "pin_d2" not in st.session_state:
     st.session_state.pin_d2 = "UNKNOWN"
 if "debug_log" not in st.session_state:
     st.session_state.debug_log = "Debug log:\n"
+
+# Add debug
+st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] App rerun\n"
 
 # ────────────────────────────────────────────────
 # MQTT callbacks
@@ -42,7 +45,6 @@ def on_message(client, userdata, msg):
     st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Received on {msg.topic}: '{new_status}'\n"
     st.session_state.status = f"Received from ESP: {new_status}"
     
-    # Parse and speak
     if "D1 ON" in new_status or "D1:ON" in new_status:
         st.session_state.pin_d1 = "ON"
         speak_browser("D1 is on")
@@ -59,25 +61,24 @@ def on_message(client, userdata, msg):
     
     st.rerun()
 
-def mqtt_loop():
-    if st.session_state.client:
-        st.session_state.client.loop_forever(retry_first_connection=True)
-
-# Connect once with thread
+# Connect
 if st.session_state.client is None:
-    client = mqtt.Client(client_id=f"streamlit_ravi_{int(time.time())}")
+    client = mqtt.Client(client_id=f"streamlit_ravi_{int(time.time())}", transport=TRANSPORT)
     client.on_connect = on_connect
     client.on_message = on_message
     try:
         client.connect(BROKER, PORT, 60)
+        client.loop_start()
         st.session_state.client = client
         st.session_state.status = "Connecting..."
-        # Start MQTT loop in background thread
-        threading.Thread(target=mqtt_loop, daemon=True).start()
-        st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] MQTT thread started\n"
     except Exception as e:
         st.session_state.status = f"Connect failed: {str(e)}"
         st.session_state.debug_log += f"Connect error: {str(e)}\n"
+
+# Force resubscribe
+if st.session_state.client is not None and st.session_state.client.is_connected():
+    st.session_state.client.subscribe(TOPIC_STATUS)
+    st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Resubscribed\n"
 
 # ────────────────────────────────────────────────
 # Browser TTS
@@ -163,15 +164,7 @@ st.subheader("Voice Test")
 if st.button("Test Voice"):
     speak_browser("Hello! Voice test successful. D1 on, D2 off.")
 
-# Manual reconnect button
-if st.button("Reconnect MQTT"):
-    if st.session_state.client:
-        st.session_state.client.disconnect()
-    st.session_state.client = None
-    st.rerun()
-
 st.info("""
 • Voice speaks on command sent + when ESP replies with status
 • If status stays UNKNOWN → check debug log for "Subscribed to..." and "Received on..."
-• If "Connect failed" or no "Connected" in debug → cloud network issue
 """)
