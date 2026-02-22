@@ -3,42 +3,48 @@ import paho.mqtt.client as mqtt
 import time
 
 # ────────────────────────────────────────────────
-# CONFIG – MUST MATCH ESP EXACTLY
+# CONFIG – MUST MATCH ESP EXACTLY (copy from Serial Monitor)
 # ────────────────────────────────────────────────
 BROKER = "broker.hivemq.com"
 PORT   = 1883
 
 TOPIC_D1     = "ravi2025/home/d1/set"
 TOPIC_D2     = "ravi2025/home/d2/set"
-TOPIC_STATUS = "ravi2025/home/status"
+TOPIC_STATUS = "ravi2025/home/status"   # Copy this line from ESP Serial if different
 
 # Session state
 if "client" not in st.session_state:
     st.session_state.client = None
 if "status" not in st.session_state:
-    st.session_state.status = "Initializing MQTT..."
+    st.session_state.status = "Starting..."
 if "pin_d1" not in st.session_state:
     st.session_state.pin_d1 = "UNKNOWN"
 if "pin_d2" not in st.session_state:
     st.session_state.pin_d2 = "UNKNOWN"
 if "last_update_time" not in st.session_state:
     st.session_state.last_update_time = None
+if "debug_log" not in st.session_state:
+    st.session_state.debug_log = ""
 
 # ────────────────────────────────────────────────
-# MQTT callbacks
+# MQTT callbacks with debug
 # ────────────────────────────────────────────────
 def on_connect(client, userdata, flags, rc):
-    st.session_state.status = f"Connected (rc={rc}) – subscribed to status"
+    st.session_state.status = f"Connected (rc={rc})"
+    st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Connected (rc={rc})\n"
     client.subscribe(TOPIC_STATUS)
-    # Request current status
-    client.publish(TOPIC_STATUS, "App connected – request status")
+    st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Subscribed to {TOPIC_STATUS}\n"
+    # Request status immediately
+    client.publish(TOPIC_STATUS, "App requesting status")
+    st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Requested status from ESP\n"
 
 def on_message(client, userdata, msg):
     new_status = msg.payload.decode().strip()
     st.session_state.last_update_time = time.strftime("%H:%M:%S")
     st.session_state.status = f"Received from ESP: {new_status}"
+    st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Received on {msg.topic}: {new_status}\n"
     
-    # Parse pins
+    # Parse pins and speak
     if "D1 ON" in new_status or "D1:ON" in new_status:
         st.session_state.pin_d1 = "ON"
         speak_browser("D1 is on")
@@ -55,9 +61,9 @@ def on_message(client, userdata, msg):
     
     st.rerun()
 
-# Connect once (only on first run)
+# Connect & maintain
 if st.session_state.client is None:
-    client = mqtt.Client(client_id=f"streamlit_app_ravi_{int(time.time())}")
+    client = mqtt.Client(client_id=f"streamlit_ravi_{int(time.time())}")
     client.on_connect = on_connect
     client.on_message = on_message
     try:
@@ -67,13 +73,11 @@ if st.session_state.client is None:
         st.session_state.status = "Connecting to broker..."
     except Exception as e:
         st.session_state.status = f"Connect failed: {str(e)}"
+        st.session_state.debug_log += f"Connect error: {str(e)}\n"
 
-# Periodic resubscribe (safe check)
-if st.session_state.client is not None:
-    if st.session_state.client.is_connected():
-        # Re-subscribe every ~10 seconds to be safe
-        if int(time.time()) % 10 == 0:
-            st.session_state.client.subscribe(TOPIC_STATUS)
+# Periodic resubscribe (every rerun if needed)
+if st.session_state.client is not None and st.session_state.client.is_connected():
+    st.session_state.client.subscribe(TOPIC_STATUS)
 
 # ────────────────────────────────────────────────
 # Browser TTS
@@ -148,11 +152,15 @@ if st.session_state.last_update_time:
 st.metric("D1", st.session_state.pin_d1)
 st.metric("D2", st.session_state.pin_d2)
 
+st.subheader("Debug Log (last 10 lines)")
+st.code(st.session_state.debug_log[-500:] if st.session_state.debug_log else "No debug info yet")
+
 st.subheader("Voice Test")
 if st.button("Test Voice"):
-    speak_browser("Hello Ravi! Voice test successful. D1 on, D2 off.")
+    speak_browser("Hello! This is a voice test. D1 on, D2 off.")
 
 st.info("""
-Voice speaks only when ESP replies with status (e.g. "D1 ON", "D2 OFF").
-If status stays UNKNOWN after button press → check Serial Monitor for "Published D1 ON → SUCCESS".
+• Voice speaks only when ESP replies with status
+• If status stays UNKNOWN → ESP publish not reaching app
+• Check debug log for connection/subscribe info
 """)
