@@ -25,10 +25,8 @@ if "last_update_time" not in st.session_state:
     st.session_state.last_update_time = None
 if "debug_log" not in st.session_state:
     st.session_state.debug_log = "Debug log:\n"
-if "last_button_click" not in st.session_state:  # ← FIXED: Button debounce
+if "last_button_click" not in st.session_state:
     st.session_state.last_button_click = 0
-if "pending_commands" not in st.session_state:   # ← NEW: Command queue
-    st.session_state.pending_commands = []
 
 # Add debug on every rerun
 st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] App rerun started\n"
@@ -42,7 +40,7 @@ def on_connect(client, userdata, flags, rc):
     st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] {msg}\n"
     client.subscribe(TOPIC_STATUS)
     st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Subscribed to {TOPIC_STATUS}\n"
-    time.sleep(0.5)  # Give ESP time to process
+    time.sleep(0.5)
     client.publish(TOPIC_STATUS, "REQUEST_STATUS")
     st.session_state.debug_log += f"[{time.strftime('%H:%M:%S')}] Requested ESP status\n"
 
@@ -51,11 +49,10 @@ def on_message(client, userdata, msg):
     new_status = msg.payload.decode().strip()
     st.session_state.debug_log += f"[{received_time}] 📨 {msg.topic}: '{new_status}'\n"
     
-    # Update status immediately
     st.session_state.status = f"ESP: {new_status}"
     st.session_state.last_update_time = received_time
     
-    # Parse ALL possible ESP status formats
+    # Parse ESP status formats
     status_lower = new_status.lower()
     if any(x in status_lower for x in ["d1:on", "d1 on", "d1=1"]):
         st.session_state.pin_d1 = "🟢 ON"
@@ -88,22 +85,24 @@ else:
     if st.session_state.client and st.session_state.client.is_connected():
         st.session_state.status = "✅ MQTT Connected"
 
-# Button debounce helper
-def safe_button_click(command, button_text, debounce_time=2.0):
+# ────────────────────────────────────────────────
+# Button handler with debounce - FIXED SYNTAX
+# ────────────────────────────────────────────────
+def send_mqtt_command(topic, payload, voice_msg, button_label, button_type=None):
     now = time.time()
-    if now - st.session_state.last_button_click < debounce_time:
-        st.warning(f"⏳ Please wait {debounce_time:.0f}s before next command")
-        return False
-    if st.button(button_text, use_container_width=True):
+    if now - st.session_state.last_button_click < 2.0:
+        st.warning("⏳ Please wait 2 seconds before next command")
+        return
+    
+    if st.button(button_label, use_container_width=True, type=button_type or "secondary"):
         st.session_state.last_button_click = now
         if st.session_state.client and st.session_state.client.is_connected():
-            st.session_state.client.publish(command["topic"], command["payload"])
-            st.session_state.status = f"Sent {command['payload']} to {command['topic']} → waiting ESP reply"
-            speak_browser(f"{command['voice']}")
-            return True
+            st.session_state.client.publish(topic, payload)
+            st.session_state.status = f"Sent {payload} → waiting ESP reply"
+            speak_browser(voice_msg)
+            st.rerun()
         else:
             st.error("❌ MQTT not connected")
-            return False
 
 # ────────────────────────────────────────────────
 # Browser TTS
@@ -136,20 +135,20 @@ st.caption(f"Broker: {BROKER}  |  {st.session_state.status}")
 
 st.markdown("---")
 
-# Control buttons with debounce
+# Control buttons - FIXED: Proper function calls
 col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
-    safe_button_click({"topic": TOPIC_D1, "payload": "ON", "voice": "D1 ON"}, "D1 🟢 ON", type="primary")
+    send_mqtt_command(TOPIC_D1, "ON", "D1 ON command sent", "D1 🟢 ON", "primary")
 
 with col2:
-    safe_button_click({"topic": TOPIC_D1, "payload": "OFF", "voice": "D1 OFF"}, "D1 🔴 OFF")
+    send_mqtt_command(TOPIC_D1, "OFF", "D1 OFF command sent", "D1 🔴 OFF")
 
 with col3:
-    safe_button_click({"topic": TOPIC_D2, "payload": "ON", "voice": "D2 ON"}, "D2 🟢 ON", type="primary")
+    send_mqtt_command(TOPIC_D2, "ON", "D2 ON command sent", "D2 🟢 ON", "primary")
 
 with col4:
-    safe_button_click({"topic": TOPIC_D2, "payload": "OFF", "voice": "D2 OFF"}, "D2 🔴 OFF")
+    send_mqtt_command(TOPIC_D2, "OFF", "D2 OFF command sent", "D2 🔴 OFF")
 
 with col5:
     if st.button("🔄 Poll ESP Status", use_container_width=True):
@@ -163,24 +162,18 @@ with col5:
 
 st.markdown("---")
 
-# FIXED: Always show pin status + auto-poll every 10s
+# Pin Status - Always visible
 st.subheader("📊 Current Pin Status from ESP")
 if st.session_state.last_update_time:
     st.caption(f"✅ Last update: {st.session_state.last_update_time}")
 else:
-    st.caption("⏳ Waiting for first ESP response...")
+    st.caption("⏳ Press 🔄 Poll ESP Status for first reading")
 
 col_status1, col_status2 = st.columns(2)
 with col_status1:
     st.metric("GPIO D1", st.session_state.pin_d1)
 with col_status2:
     st.metric("GPIO D2", st.session_state.pin_d2)
-
-# Auto-poll button
-if st.button("🔄 Auto Poll Now", help="Force ESP to send current status"):
-    if st.session_state.client and st.session_state.client.is_connected():
-        st.session_state.client.publish(TOPIC_STATUS, "REQUEST_STATUS")
-        st.rerun()
 
 st.markdown("---")
 
@@ -189,12 +182,11 @@ st.code(st.session_state.debug_log[-1000:], language="log")
 
 st.subheader("🔊 Voice Test")
 if st.button("🎤 Test Voice"):
-    speak_browser("ESP8266 control system working. D1 and D2 status ready.")
+    speak_browser("ESP8266 control system working perfectly.")
 
 st.info("""
-🔧 **Status Check:**
-• Press 🔄 Poll ESP Status → ESP must reply on `ravi2025/home/status`
-• Expected ESP message: "D1:ON D2:OFF" or "D1 ON, D2 OFF"
-• Double-click blocked (2s cooldown)
-• Check Serial Monitor on ESP for publish confirmation
+🔧 **Expected ESP Response Format:**
+• `ravi2025/home/status` → "D1:ON D2:OFF" or "D1 ON, D2 OFF"
+• Check ESP Serial Monitor for publish confirmation
+• Press 🔄 Poll ESP Status to test connection
 """)
