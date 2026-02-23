@@ -2,103 +2,64 @@ import streamlit as st
 import paho.mqtt.client as mqtt
 import time
 
-# CONFIG
 BROKER = "broker.hivemq.com"
 PORT = 1883
-TOPIC_D1 = "ravi2025/home/d1/set"
-TOPIC_D2 = "ravi2025/home/d2/set"
-TOPIC_STATUS = "ravi2025/home/status"
 
-# Initialize session state
-if "client" not in st.session_state: st.session_state.client = None
-if "status" not in st.session_state: st.session_state.status = "🚀 Starting..."
-if "connected" not in st.session_state: st.session_state.connected = False
-if "d1_state" not in st.session_state: st.session_state.d1_state = "WAIT"
-if "d2_state" not in st.session_state: st.session_state.d2_state = "WAIT"
-if "messages" not in st.session_state: st.session_state.messages = []
+# Listen to ALL ravi2025 topics to catch ESP messages
+TOPIC_WILDCARD = "ravi2025/#"
+
+if "client" not in st.session_state: 
+    st.session_state.client = None
+    st.session_state.all_messages = []
+    st.session_state.status = "🚀 Starting MQTT listener..."
 
 def on_connect(client, userdata, flags, rc):
-    st.session_state.status = f"✅ MQTT CONNECTED (rc={rc})"
-    client.subscribe(TOPIC_STATUS)
+    st.session_state.status = f"✅ MQTT Connected! Listening to ALL ravi2025 topics"
+    client.subscribe(TOPIC_WILDCARD)  # Catch EVERYTHING from your ESP
     st.rerun()
 
 def on_message(client, userdata, msg):
-    msg_text = msg.payload.decode()
-    st.session_state.messages.append(msg_text)
-    st.session_state.status = f"📨 ESP SAYS: {msg_text}"
-    st.session_state.connected = True
-    
-    # Parse D1/D2 states
-    if "D1=ON" in msg_text: st.session_state.d1_state = "ON"
-    elif "D1=OFF" in msg_text: st.session_state.d1_state = "OFF"
-    if "D2=ON" in msg_text: st.session_state.d2_state = "ON" 
-    elif "D2=OFF" in msg_text: st.session_state.d2_state = "OFF"
-    
+    msg_data = f"📨 TOPIC: {msg.topic} | PAYLOAD: {msg.payload.decode()}"
+    st.session_state.all_messages.append(msg_data)
+    st.session_state.status = msg_data
     st.rerun()
 
-def send_command(topic, cmd):
-    if st.session_state.client:
-        st.session_state.client.publish(topic, cmd)
-        st.success(f"✅ SENT {cmd} → {topic}")
-        st.rerun()
-
-# MQTT Setup - FIXED
+# Setup MQTT
 if st.session_state.client is None:
     client = mqtt.Client()
     client.on_connect = on_connect
     client.on_message = on_message
-    try:
-        st.session_state.status = "🔄 Connecting MQTT... please wait"
-        client.connect(BROKER, PORT, 60)
-        client.loop_start()
-        time.sleep(3)  # Critical: Let connection complete
-        st.session_state.client = client
-        st.session_state.status = "✅ MQTT READY - waiting for ESP..."
-    except Exception as e:
-        st.session_state.status = f"❌ MQTT ERROR: {e}"
+    client.connect(BROKER, PORT, 60)
+    client.loop_start()
+    st.session_state.client = client
+    time.sleep(2)
 
-# ─── UI ───
-st.set_page_config(layout="wide")
-st.title("🔌 ESP8266 D1/D2 Control Panel")
+st.title("🔍 MQTT ESP DEBUGGER")
+st.info(f"**Status**: {st.session_state.status}")
 
-# Status Metrics
-col1, col2, col3 = st.columns(3)
-with col1: st.metric("D1", st.session_state.d1_state)
-with col2: st.metric("D2", st.session_state.d2_state) 
-with col3: st.metric("ESP", "✅" if st.session_state.connected else "❌")
-
-st.caption(f"**MQTT**: {st.session_state.status}")
-
-st.markdown("---")
-
-# TEST BUTTONS
-st.subheader("🔍 Test MQTT Communication")
-col1, col2, col3 = st.columns(3)
-if col1.button("📤 Send TEST to ESP", use_container_width=True):
-    send_command(TOPIC_STATUS, "TEST from Web")
-if col2.button("📤 D1 ON", use_container_width=True):
-    send_command(TOPIC_D1, "ON")
-if col3.button("📤 D2 ON", use_container_width=True):
-    send_command(TOPIC_D2, "ON")
-
-st.markdown("---")
-
-# MAIN CONTROLS  
-st.subheader("🎮 Pin Controls")
-cols = st.columns(4)
-if cols[0].button("D1 ON"): send_command(TOPIC_D1, "ON")
-if cols[1].button("D1 OFF"): send_command(TOPIC_D1, "OFF")
-if cols[2].button("D2 ON"): send_command(TOPIC_D2, "ON")
-if cols[3].button("D2 OFF"): send_command(TOPIC_D2, "OFF")
-
-st.markdown("---")
-
-# DEBUG - All messages
-st.subheader("📋 MQTT Messages from ESP")
-if st.session_state.messages:
-    for msg in st.session_state.messages[-10:]:
+st.subheader("📡 ALL MQTT Messages (ravi2025/#)")
+if st.session_state.all_messages:
+    for msg in st.session_state.all_messages[-10:]:
         st.code(msg)
 else:
-    st.info("👈 No messages received from ESP yet...")
+    st.warning("⏳ NO MESSAGES YET - ESP must publish something...")
 
-st.caption("**ESP must publish to:** `ravi2025/home/status`")
+st.subheader("🧪 Send Test Commands")
+col1, col2, col3 = st.columns(3)
+if col1.button("📤 ravi2025/home/status", use_container_width=True):
+    st.session_state.client.publish("ravi2025/home/status", "TEST-WEB")
+if col2.button("📤 ravi2025/home/d1/set", use_container_width=True):
+    st.session_state.client.publish("ravi2025/home/d1/set", "ON")
+if col3.button("📤 ravi2025/home/d2/set", use_container_width=True):
+    st.session_state.client.publish("ravi2025/home/d2/set", "ON")
+
+st.markdown("---")
+st.info("""
+🔑 **WHAT TO EXPECT:**
+1. Status: ✅ MQTT Connected! 
+2. ESP sends ANY message → Shows here IMMEDIATELY
+3. If NO messages after 1 minute → ESP MQTT publish BROKEN
+
+👉 **YOUR ESP serial shows 'Published: ESP online - ready'** 
+   but Streamlit sees NOTHING = WRONG TOPIC!
+""")
