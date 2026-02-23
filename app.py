@@ -1,7 +1,28 @@
 import streamlit as st
 import paho.mqtt.client as mqtt
 import time
+// Add these at the top (after includes)
+const char* mqtt_server = "broker.hivemq.com";
+const char* status_topic = "ravi2025/home/status";
+const char* d1_state_topic = "ravi2025/home/d1/state";
+const char* d2_state_topic = "ravi2025/home/d2/state";
 
+// In your setup() or mqtt connect function, AFTER successful client.connect(mqtt_client_id, ...):
+Serial.println("MQTT CONNECTED!");
+
+// Set Last Will and Testament (LWT) - broker will auto-publish OFFLINE if ESP disconnects
+client.setWill(status_topic, "OFFLINE", true, 1);  // retain = true, QoS = 1
+
+// Announce that we are ONLINE - retained message!
+client.publish(status_topic, "ONLINE", true, 1);
+Serial.println("Published retained: ONLINE to status topic");
+
+// Publish current real pin states - retained!
+String d1_status = (digitalRead(D1) == LOW) ? "ON" : "OFF";  // change LOW/HIGH based on your relay active logic
+String d2_status = (digitalRead(D2) == LOW) ? "ON" : "OFF";
+client.publish(d1_state_topic, d1_status.c_str(), true, 1);
+client.publish(d2_state_topic, d2_status.c_str(), true, 1);
+Serial.println("Published retained states: D1=" + d1_status + " D2=" + d2_status);
 BROKER = "broker.hivemq.com"
 PORT = 1883
 
@@ -142,3 +163,4 @@ if st.button("Test Voice"):
     speak("Test voice: D1 on, D2 off")
 
 st.info("After updating ESP → refresh page. Check debug log for 'RX:' lines with retain=True.")
+
