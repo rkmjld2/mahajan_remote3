@@ -2,64 +2,136 @@ import streamlit as st
 import paho.mqtt.client as mqtt
 import time
 
+# ────────────────────────────────────────────────
+# CONFIG – MQTT public broker
+# ────────────────────────────────────────────────
 BROKER = "broker.hivemq.com"
-PORT = 1883
+PORT   = 1883
 
-# Listen to ALL ravi2025 topics to catch ESP messages
-TOPIC_WILDCARD = "ravi2025/#"
+# Make sure these match EXACTLY with your ESP code (case-sensitive!)
+TOPIC_D1     = "ravi2025/home/d1/set"
+TOPIC_D2     = "ravi2025/home/d2/set"
+TOPIC_STATUS = "ravi2025/home/status"
 
-if "client" not in st.session_state: 
+# Session state
+if "client" not in st.session_state:
     st.session_state.client = None
-    st.session_state.all_messages = []
-    st.session_state.status = "🚀 Starting MQTT listener..."
+if "status" not in st.session_state:
+    st.session_state.status = "Initializing MQTT connection..."
+if "last_spoken" not in st.session_state:
+    st.session_state.last_spoken = ""
 
+# ────────────────────────────────────────────────
+# MQTT callbacks
+# ────────────────────────────────────────────────
 def on_connect(client, userdata, flags, rc):
-    st.session_state.status = f"✅ MQTT Connected! Listening to ALL ravi2025 topics"
-    client.subscribe(TOPIC_WILDCARD)  # Catch EVERYTHING from your ESP
-    st.rerun()
+    client.subscribe(TOPIC_STATUS)
+    new_msg = "Connected to broker – waiting for ESP"
+    st.session_state.status = new_msg
+    speak_browser(new_msg)
 
 def on_message(client, userdata, msg):
-    msg_data = f"📨 TOPIC: {msg.topic} | PAYLOAD: {msg.payload.decode()}"
-    st.session_state.all_messages.append(msg_data)
-    st.session_state.status = msg_data
+    new_status = msg.payload.decode().strip()
+    st.session_state.status = new_status
+    speak_browser(new_status)
     st.rerun()
 
-# Setup MQTT
+# Connect once
 if st.session_state.client is None:
     client = mqtt.Client()
     client.on_connect = on_connect
     client.on_message = on_message
-    client.connect(BROKER, PORT, 60)
-    client.loop_start()
-    st.session_state.client = client
-    time.sleep(2)
+    try:
+        client.connect(BROKER, PORT, 60)
+        client.loop_start()
+        st.session_state.client = client
+    except Exception as e:
+        st.session_state.status = f"Connection failed: {str(e)}"
 
-st.title("🔍 MQTT ESP DEBUGGER")
-st.info(f"**Status**: {st.session_state.status}")
+# ────────────────────────────────────────────────
+# Browser TTS – speaks text aloud
+# ────────────────────────────────────────────────
+def speak_browser(text: str):
+    if not text or text == st.session_state.last_spoken:
+        return
+    st.session_state.last_spoken = text
+    safe_text = text.replace('"', '\\"').replace("'", "\\'")
+    js = f"""
+    <script>
+    if ('speechSynthesis' in window) {{
+        const utterance = new SpeechSynthesisUtterance("{safe_text}");
+        utterance.lang = 'en-US';
+        utterance.volume = 1.0;
+        utterance.rate = 0.95;
+        utterance.pitch = 1.0;
+        window.speechSynthesis.speak(utterance);
+    }}
+    </script>
+    """
+    st.components.v1.html(js, height=0)
 
-st.subheader("📡 ALL MQTT Messages (ravi2025/#)")
-if st.session_state.all_messages:
-    for msg in st.session_state.all_messages[-10:]:
-        st.code(msg)
-else:
-    st.warning("⏳ NO MESSAGES YET - ESP must publish something...")
+# ────────────────────────────────────────────────
+# UI
+# ────────────────────────────────────────────────
+st.set_page_config(page_title="ESP8266 Remote + Voice", layout="wide")
 
-st.subheader("🧪 Send Test Commands")
-col1, col2, col3 = st.columns(3)
-if col1.button("📤 ravi2025/home/status", use_container_width=True):
-    st.session_state.client.publish("ravi2025/home/status", "TEST-WEB")
-if col2.button("📤 ravi2025/home/d1/set", use_container_width=True):
-    st.session_state.client.publish("ravi2025/home/d1/set", "ON")
-if col3.button("📤 ravi2025/home/d2/set", use_container_width=True):
-    st.session_state.client.publish("ravi2025/home/d2/set", "ON")
+st.title("ESP8266 D1 / D2 Remote Control")
+st.caption(f"Broker: {BROKER}  |  Status: {st.session_state.status}")
 
 st.markdown("---")
-st.info("""
-🔑 **WHAT TO EXPECT:**
-1. Status: ✅ MQTT Connected! 
-2. ESP sends ANY message → Shows here IMMEDIATELY
-3. If NO messages after 1 minute → ESP MQTT publish BROKEN
 
-👉 **YOUR ESP serial shows 'Published: ESP online - ready'** 
-   but Streamlit sees NOTHING = WRONG TOPIC!
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    if st.button("D1 ON", use_container_width=True, type="primary"):
+        if st.session_state.client:
+            st.session_state.client.publish(TOPIC_D1, "ON")
+            msg = "Sent command: D1 ON"
+            st.session_state.status = msg
+            speak_browser(msg)
+        else:
+            st.error("MQTT not connected yet")
+
+with col2:
+    if st.button("D1 OFF", use_container_width=True):
+        if st.session_state.client:
+            st.session_state.client.publish(TOPIC_D1, "OFF")
+            msg = "Sent command: D1 OFF"
+            st.session_state.status = msg
+            speak_browser(msg)
+        else:
+            st.error("MQTT not connected yet")
+
+with col3:
+    if st.button("D2 ON", use_container_width=True, type="primary"):
+        if st.session_state.client:
+            st.session_state.client.publish(TOPIC_D2, "ON")
+            msg = "Sent command: D2 ON"
+            st.session_state.status = msg
+            speak_browser(msg)
+        else:
+            st.error("MQTT not connected yet")
+
+with col4:
+    if st.button("D2 OFF", use_container_width=True):
+        if st.session_state.client:
+            st.session_state.client.publish(TOPIC_D2, "OFF")
+            msg = "Sent command: D2 OFF"
+            st.session_state.status = msg
+            speak_browser(msg)
+        else:
+            st.error("MQTT not connected yet")
+
+st.markdown("---")
+
+st.subheader("Latest status from ESP (spoken aloud when changed)")
+st.code(st.session_state.status)
+
+if st.button("Test Voice Output"):
+    speak_browser("Hello Ravi! This is a test of voice output. D1 on, D2 off.")
+
+st.info("""
+Voice output is automatic when status changes or buttons are pressed.
+Works best in Chrome/Edge. Safari may need page interaction first.
+No microphone needed — only speaking.
 """)
