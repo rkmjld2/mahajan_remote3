@@ -1,117 +1,93 @@
 import streamlit as st
 import paho.mqtt.client as mqtt
-import time
 import re
 
-# CONFIG
+# CONFIG - EXACT MATCH YOUR ESP
 BROKER = "broker.hivemq.com"
 PORT = 1883
-TOPIC_D1 = "ravi2025/home/d1/set"
-TOPIC_D2 = "ravi2025/home/d2/set" 
-TOPIC_STATUS = "ravi2025/home/status"
+TOPIC_D1 = "ravi2025/home/d1/set"      # ESP SUBSCRIBES to this
+TOPIC_D2 = "ravi2025/home/d2/set"      # ESP SUBSCRIBES to this  
+TOPIC_STATUS = "ravi2025/home/status"  # ESP PUBLISHES to this
 
 # Session state
-if "client" not in st.session_state: st.session_state.client = None
-if "status" not in st.session_state: st.session_state.status = "Initializing..."
-if "last_spoken" not in st.session_state: st.session_state.last_spoken = ""
-if "d1_state" not in st.session_state: st.session_state.d1_state = "UNKNOWN"
-if "d2_state" not in st.session_state: st.session_state.d2_state = "UNKNOWN"
-if "esp_connected" not in st.session_state: st.session_state.esp_connected = False
+for key in ["client", "status", "last_spoken", "esp_connected", "d1_state", "d2_state"]:
+    if key not in st.session_state:
+        st.session_state[key] = None if key == "client" else ""
+
+st.session_state.status = "🔄 Connecting..."
 
 def on_connect(client, userdata, flags, rc):
+    st.info(f"✅ MQTT Connected (rc={rc}). Subscribed to {TOPIC_STATUS}")
     client.subscribe(TOPIC_STATUS)
-    st.session_state.status = "✅ MQTT OK – waiting ESP..."
-    speak_browser("Connected, waiting for ESP")
 
 def on_message(client, userdata, msg):
-    status = msg.payload.decode().strip()
-    st.session_state.status = status
+    msg_text = msg.payload.decode()
+    st.session_state.status = f"📨 RECEIVED: {msg_text}"
+    st.session_state.esp_connected = True
     
-    # Detect ESP connection & parse pins
-    if any(x in status.lower() for x in ["online", "ready", "connected"]):
-        st.session_state.esp_connected = True
-        speak_browser("ESP connected!")
-    
-    # Parse D1,D2 (flexible matching)
-    d1_match = re.search(r'D1[=:]\s*([A-Z]+)', status, re.I)
-    d2_match = re.search(r'D2[=:]\s*([A-Z]+)', status, re.I)
-    if d1_match: st.session_state.d1_state = d1_match.group(1)
-    if d2_match: st.session_state.d2_state = d2_match.group(1)
+    # Parse any D1/D2 in message
+    if "ON" in msg_text or "OFF" in msg_text:
+        if "D1" in msg_text: st.session_state.d1_state = "ON" if "D1.*ON" in msg_text else "OFF"
+        if "D2" in msg_text: st.session_state.d2_state = "ON" if "D2.*ON" in msg_text else "OFF"
     
     st.rerun()
 
-# MQTT Setup
+def on_publish(client, userdata, mid):
+    st.success("✅ Command SENT")
+
+# CONNECT MQTT
 if st.session_state.client is None:
     client = mqtt.Client()
     client.on_connect = on_connect
     client.on_message = on_message
+    client.on_publish = on_publish
     try:
         client.connect(BROKER, PORT, 60)
         client.loop_start()
         st.session_state.client = client
-        st.rerun()
-    except Exception as e:
-        st.session_state.status = f"❌ MQTT fail: {e}"
+    except:
+        st.session_state.status = "❌ MQTT Connection FAILED"
 
-def send_command(topic, cmd):
-    if st.session_state.client and st.session_state.esp_connected:
+def send_cmd(topic, cmd):
+    if st.session_state.client:
         st.session_state.client.publish(topic, cmd)
-        speak_browser(f"Sent {cmd}")
         st.rerun()
-    else:
-        st.error("ESP not ready")
-
-def speak_browser(text):
-    if text == st.session_state.last_spoken: return
-    st.session_state.last_spoken = text
-    safe = text.replace('"', '\\"').replace("'", "\\'")
-    st.components.v1.html(f"""
-    <script>
-    if (speechSynthesis) {{
-        speechSynthesis.speak(new SpeechSynthesisUtterance("{safe}"));
-    }}
-    </script>
-    """, height=0)
 
 # ─── UI ───
 st.set_page_config(layout="wide")
-st.title("🔌 ESP8266 D1/D2 Control")
+st.title("🔌 ESP8266 Debug Control")
 
-st.caption(f"MQTT: {BROKER}:{PORT} | Status: **{st.session_state.status}**")
+st.caption(f"**Status**: {st.session_state.status}")
 
-# Pin Status Cards
-st.subheader("📊 Pin Status")
-col1, col2, col3 = st.columns([2,2,3])
-
+# BIG STATUS DISPLAY
+col1, col2 = st.columns(2)
 with col1:
-    color1 = "inverse" if st.session_state.d1_state == "ON" else "secondary"
-    st.metric("D1", st.session_state.d1_state, label_visibility="collapsed")
-
+    st.metric("D1", st.session_state.d1_state or "WAIT")
 with col2:
-    color2 = "inverse" if st.session_state.d2_state == "ON" else "secondary"
-    st.metric("D2", st.session_state.d2_state, label_visibility="collapsed")
+    st.metric("D2", st.session_state.d2_state or "WAIT")
 
-with col3:
-    conn_color = "inverse" if st.session_state.esp_connected else "warning"
-    st.metric("ESP", "✅" if st.session_state.esp_connected else "❌", label_visibility="collapsed")
+esp_icon = "✅" if st.session_state.esp_connected else "❌"
+st.metric("ESP", esp_icon, label_visibility="collapsed")
 
 st.markdown("---")
 
-# Buttons - FIXED SYNTAX (no lambda in on_click)
-st.subheader("🎮 Controls")
-col1, col2, col3, col4 = st.columns(4)
+# DEBUG BUTTONS
+st.subheader("🔍 DEBUG - Send Test Commands")
+c1, c2, c3 = st.columns(3)
+if c1.button("📤 TEST STATUS", use_container_width=True):
+    send_cmd(TOPIC_STATUS, "TEST from Streamlit")
+if c2.button("📤 D1 ON", use_container_width=True):
+    send_cmd(TOPIC_D1, "ON")
+if c3.button("📤 D2 ON", use_container_width=True):
+    send_cmd(TOPIC_D2, "ON")
 
-if col1.button("D1 ON", use_container_width=True, disabled=not st.session_state.esp_connected):
-    send_command(TOPIC_D1, "ON")
-if col2.button("D1 OFF", use_container_width=True, disabled=not st.session_state.esp_connected):
-    send_command(TOPIC_D1, "OFF")
-if col3.button("D2 ON", use_container_width=True, disabled=not st.session_state.esp_connected):
-    send_command(TOPIC_D2, "ON")
-if col4.button("D2 OFF", use_container_width=True, disabled=not st.session_state.esp_connected):
-    send_command(TOPIC_D2, "OFF")
+# CONTROL BUTTONS
+st.subheader("🎮 Main Controls")
+cols = st.columns(4)
+if cols[0].button("D1 ON"): send_cmd(TOPIC_D1, "ON")
+if cols[1].button("D1 OFF"): send_cmd(TOPIC_D1, "OFF") 
+if cols[2].button("D2 ON"): send_cmd(TOPIC_D2, "ON")
+if cols[3].button("D2 OFF"): send_cmd(TOPIC_D2, "OFF")
 
 st.markdown("---")
-st.subheader("📡 Raw ESP Status")
 st.code(st.session_state.status)
-
-st.info("🔧 **Debug**: Check browser console + ESP serial for MQTT topics match")
