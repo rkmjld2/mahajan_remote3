@@ -1,6 +1,8 @@
 import streamlit as st
 import paho.mqtt.client as mqtt
 import time
+BROKER = "broker.hivemq.com"
+PORT = 1883
 // Add these at the top (after includes)
 const char* mqtt_server = "broker.hivemq.com";
 const char* status_topic = "ravi2025/home/status";
@@ -23,8 +25,6 @@ String d2_status = (digitalRead(D2) == LOW) ? "ON" : "OFF";
 client.publish(d1_state_topic, d1_status.c_str(), true, 1);
 client.publish(d2_state_topic, d2_status.c_str(), true, 1);
 Serial.println("Published retained states: D1=" + d1_status + " D2=" + d2_status);
-BROKER = "broker.hivemq.com"
-PORT = 1883
 
 CLIENT_ID = f"streamlit_ravi_{int(time.time())}"
 
@@ -163,5 +163,6 @@ if st.button("Test Voice"):
     speak("Test voice: D1 on, D2 off")
 
 st.info("After updating ESP → refresh page. Check debug log for 'RX:' lines with retain=True.")
+
 
 
