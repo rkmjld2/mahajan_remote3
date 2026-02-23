@@ -25,7 +25,7 @@ def on_message(client, userdata, msg):
     new_status = msg.payload.decode().strip()
     st.session_state.status = new_status
 
-    # Handle format like "D1:OFF,D2:OFF"
+    # Parse "D1:OFF,D2:ON"
     try:
         parts = new_status.split(",")
         for p in parts:
@@ -35,6 +35,7 @@ def on_message(client, userdata, msg):
     except Exception as e:
         print("Parse error:", e)
 
+    # Speak only when ESP sends status
     speak_browser(new_status)
     st.rerun()
 
@@ -108,4 +109,5 @@ st.code(st.session_state.status)
 
 if st.button("Test Voice Output"):
     speak_browser("Hello Ravi! This is a test of voice output. D1 on, D2 off.")
+
 
