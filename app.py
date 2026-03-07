@@ -1,16 +1,13 @@
 import streamlit as st
 import paho.mqtt.client as mqtt
 
-# MQTT Broker
 BROKER = "broker.hivemq.com"
 PORT = 1883
 
 TOPIC_STATUS = "ravi2025/home/status"
 
-# ESP8266 pins
 PINS = ["D0","D1","D2","D3","D4","D5","D6","D7"]
 
-# MQTT topics
 TOPICS = {pin: f"ravi2025/home/{pin.lower()}/set" for pin in PINS}
 
 # ─────────────────────────────────────────────
@@ -22,27 +19,51 @@ if "client" not in st.session_state:
 if "status" not in st.session_state:
     st.session_state.status = "Starting MQTT..."
 
-# store pin states
 for pin in PINS:
     if pin not in st.session_state:
         st.session_state[pin] = False
 
 
 # ─────────────────────────────────────────────
+# Parse ESP status string
+# ─────────────────────────────────────────────
+def update_pin_states(msg):
+
+    parts = msg.split()
+
+    for part in parts:
+
+        if "=" in part:
+
+            p, v = part.split("=")
+
+            if p in PINS:
+                st.session_state[p] = (v == "ON")
+
+
+# ─────────────────────────────────────────────
 # MQTT callbacks
 # ─────────────────────────────────────────────
 def on_connect(client, userdata, flags, rc):
+
     client.subscribe(TOPIC_STATUS)
+
     st.session_state.status = "Connected to MQTT broker"
 
 
 def on_message(client, userdata, msg):
-    st.session_state.status = msg.payload.decode()
+
+    message = msg.payload.decode()
+
+    st.session_state.status = message
+
+    update_pin_states(message)
+
     st.rerun()
 
 
 # ─────────────────────────────────────────────
-# Connect MQTT once
+# Connect MQTT
 # ─────────────────────────────────────────────
 if st.session_state.client is None:
 
@@ -54,8 +75,11 @@ if st.session_state.client is None:
     try:
         client.connect(BROKER, PORT, 60)
         client.loop_start()
+
         st.session_state.client = client
+
     except Exception as e:
+
         st.session_state.status = f"MQTT Error: {e}"
 
 
@@ -70,10 +94,8 @@ st.write("Status:", st.session_state.status)
 
 st.markdown("---")
 
-# Create 4 columns
 cols = st.columns(4)
 
-# Buttons
 for i, pin in enumerate(PINS):
 
     with cols[i % 4]:
@@ -84,20 +106,21 @@ for i, pin in enumerate(PINS):
 
         if st.button(label, key=f"btn_{pin}", use_container_width=True):
 
-            # toggle state
             new_state = not state
+
             st.session_state[pin] = new_state
 
-            command = "ON" if new_state else "OFF"
+            cmd = "ON" if new_state else "OFF"
 
             if st.session_state.client:
-                st.session_state.client.publish(TOPICS[pin], command)
+                st.session_state.client.publish(TOPICS[pin], cmd)
 
-            st.session_state.status = f"{pin} turned {command}"
+            st.session_state.status = f"{pin} turned {cmd}"
 
             st.rerun()
 
 st.markdown("---")
 
-st.subheader("ESP8266 Status")
+st.subheader("ESP8266 Status Message")
+
 st.code(st.session_state.status)
