@@ -1,56 +1,80 @@
 import streamlit as st
 import paho.mqtt.client as mqtt
 
+# MQTT Broker
 BROKER = "broker.hivemq.com"
-PORT   = 1883
+PORT = 1883
 
 TOPIC_STATUS = "ravi2025/home/status"
 
-pins = ["D0","D1","D2","D3","D4","D5","D6","D7"]
+# ESP8266 pins
+PINS = ["D0","D1","D2","D3","D4","D5","D6","D7"]
 
-topics = {pin: f"ravi2025/home/{pin.lower()}/set" for pin in pins}
+# MQTT topics
+TOPICS = {pin: f"ravi2025/home/{pin.lower()}/set" for pin in PINS}
 
-# Session states
+# ─────────────────────────────────────────────
+# Session variables
+# ─────────────────────────────────────────────
 if "client" not in st.session_state:
     st.session_state.client = None
 
 if "status" not in st.session_state:
-    st.session_state.status = "Initializing MQTT connection..."
+    st.session_state.status = "Starting MQTT..."
 
 # store pin states
-for pin in pins:
+for pin in PINS:
     if pin not in st.session_state:
         st.session_state[pin] = False
 
+
+# ─────────────────────────────────────────────
 # MQTT callbacks
+# ─────────────────────────────────────────────
 def on_connect(client, userdata, flags, rc):
     client.subscribe(TOPIC_STATUS)
-    st.session_state.status = "Connected to broker"
+    st.session_state.status = "Connected to MQTT broker"
+
 
 def on_message(client, userdata, msg):
     st.session_state.status = msg.payload.decode()
     st.rerun()
 
-# Connect MQTT
+
+# ─────────────────────────────────────────────
+# Connect MQTT once
+# ─────────────────────────────────────────────
 if st.session_state.client is None:
+
     client = mqtt.Client()
+
     client.on_connect = on_connect
     client.on_message = on_message
-    client.connect(BROKER, PORT, 60)
-    client.loop_start()
-    st.session_state.client = client
 
-st.set_page_config(page_title="ESP8266 8 Pin Control", layout="wide")
+    try:
+        client.connect(BROKER, PORT, 60)
+        client.loop_start()
+        st.session_state.client = client
+    except Exception as e:
+        st.session_state.status = f"MQTT Error: {e}"
 
-st.title("ESP8266 Remote Control (Toggle Switches)")
+
+# ─────────────────────────────────────────────
+# Streamlit UI
+# ─────────────────────────────────────────────
+st.set_page_config(page_title="ESP8266 Remote Control", layout="wide")
+
+st.title("ESP8266 8-Pin Remote Control")
 
 st.write("Status:", st.session_state.status)
 
 st.markdown("---")
 
+# Create 4 columns
 cols = st.columns(4)
 
-for i, pin in enumerate(pins):
+# Buttons
+for i, pin in enumerate(PINS):
 
     with cols[i % 4]:
 
@@ -58,17 +82,18 @@ for i, pin in enumerate(pins):
 
         label = f"{pin} : {'ON' if state else 'OFF'}"
 
-        if st.button(label, key=pin, use_container_width=True):
+        if st.button(label, key=f"btn_{pin}", use_container_width=True):
 
-            # Toggle state
-            new_state = not st.session_state[pin]
+            # toggle state
+            new_state = not state
             st.session_state[pin] = new_state
 
-            cmd = "ON" if new_state else "OFF"
+            command = "ON" if new_state else "OFF"
 
-            st.session_state.client.publish(topics[pin], cmd)
+            if st.session_state.client:
+                st.session_state.client.publish(TOPICS[pin], command)
 
-            st.session_state.status = f"{pin} turned {cmd}"
+            st.session_state.status = f"{pin} turned {command}"
 
             st.rerun()
 
