@@ -8,13 +8,19 @@ TOPIC_STATUS = "ravi2025/home/status"
 
 pins = ["D0","D1","D2","D3","D4","D5","D6","D7"]
 
-# create topic dictionary
 topics = {pin: f"ravi2025/home/{pin.lower()}/set" for pin in pins}
 
+# Session states
 if "client" not in st.session_state:
     st.session_state.client = None
+
 if "status" not in st.session_state:
     st.session_state.status = "Initializing MQTT connection..."
+
+# store pin states
+for pin in pins:
+    if pin not in st.session_state:
+        st.session_state[pin] = False
 
 # MQTT callbacks
 def on_connect(client, userdata, flags, rc):
@@ -25,7 +31,7 @@ def on_message(client, userdata, msg):
     st.session_state.status = msg.payload.decode()
     st.rerun()
 
-# connect once
+# Connect MQTT
 if st.session_state.client is None:
     client = mqtt.Client()
     client.on_connect = on_connect
@@ -34,9 +40,9 @@ if st.session_state.client is None:
     client.loop_start()
     st.session_state.client = client
 
-st.set_page_config(page_title="ESP8266 8 Relay Control", layout="wide")
+st.set_page_config(page_title="ESP8266 8 Pin Control", layout="wide")
 
-st.title("ESP8266 Remote Control (8 Pins)")
+st.title("ESP8266 Remote Control (Toggle Switches)")
 
 st.write("Status:", st.session_state.status)
 
@@ -48,13 +54,23 @@ for i, pin in enumerate(pins):
 
     with cols[i % 4]:
 
-        if st.button(f"{pin} ON", key=f"{pin}_on", use_container_width=True):
-            st.session_state.client.publish(topics[pin], "ON")
-            st.session_state.status=f"{pin} ON command sent"
+        state = st.session_state[pin]
 
-        if st.button(f"{pin} OFF", key=f"{pin}_off", use_container_width=True):
-            st.session_state.client.publish(topics[pin], "OFF")
-            st.session_state.status=f"{pin} OFF command sent"
+        label = f"{pin} : {'ON' if state else 'OFF'}"
+
+        if st.button(label, key=pin, use_container_width=True):
+
+            # Toggle state
+            new_state = not st.session_state[pin]
+            st.session_state[pin] = new_state
+
+            cmd = "ON" if new_state else "OFF"
+
+            st.session_state.client.publish(topics[pin], cmd)
+
+            st.session_state.status = f"{pin} turned {cmd}"
+
+            st.rerun()
 
 st.markdown("---")
 
