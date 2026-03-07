@@ -1,5 +1,6 @@
 import streamlit as st
 import paho.mqtt.client as mqtt
+from streamlit_autorefresh import st_autorefresh
 
 BROKER = "broker.hivemq.com"
 PORT = 1883
@@ -10,29 +11,31 @@ PINS = ["D0","D1","D2","D3","D4","D5","D6","D7"]
 
 TOPICS = {pin: f"ravi2025/home/{pin.lower()}/set" for pin in PINS}
 
-# ─────────────────────────────────────────────
+# auto refresh every 2 seconds
+st_autorefresh(interval=2000, key="mqtt_refresh")
+
+# ─────────────────────────────
 # Session variables
-# ─────────────────────────────────────────────
+# ─────────────────────────────
 if "client" not in st.session_state:
     st.session_state.client = None
 
 if "status" not in st.session_state:
-    st.session_state.status = "Starting MQTT..."
+    st.session_state.status = "Connecting to MQTT..."
 
 for pin in PINS:
     if pin not in st.session_state:
         st.session_state[pin] = False
 
 
-# ─────────────────────────────────────────────
-# Parse ESP status string
-# ─────────────────────────────────────────────
+# ─────────────────────────────
+# Parse ESP status message
+# ─────────────────────────────
 def update_pin_states(msg):
 
     parts = msg.split()
 
     for part in parts:
-
         if "=" in part:
 
             p, v = part.split("=")
@@ -41,14 +44,16 @@ def update_pin_states(msg):
                 st.session_state[p] = (v == "ON")
 
 
-# ─────────────────────────────────────────────
+# ─────────────────────────────
 # MQTT callbacks
-# ─────────────────────────────────────────────
+# ─────────────────────────────
 def on_connect(client, userdata, flags, rc):
 
-    client.subscribe(TOPIC_STATUS)
-
-    st.session_state.status = "Connected to MQTT broker"
+    if rc == 0:
+        st.session_state.status = "Connected to MQTT broker"
+        client.subscribe(TOPIC_STATUS)
+    else:
+        st.session_state.status = "MQTT connection failed"
 
 
 def on_message(client, userdata, msg):
@@ -59,21 +64,21 @@ def on_message(client, userdata, msg):
 
     update_pin_states(message)
 
-    st.rerun()
 
-
-# ─────────────────────────────────────────────
-# Connect MQTT
-# ─────────────────────────────────────────────
+# ─────────────────────────────
+# MQTT connect once
+# ─────────────────────────────
 if st.session_state.client is None:
 
-    client = mqtt.Client()
-
-    client.on_connect = on_connect
-    client.on_message = on_message
-
     try:
+
+        client = mqtt.Client()
+
+        client.on_connect = on_connect
+        client.on_message = on_message
+
         client.connect(BROKER, PORT, 60)
+
         client.loop_start()
 
         st.session_state.client = client
@@ -83,9 +88,9 @@ if st.session_state.client is None:
         st.session_state.status = f"MQTT Error: {e}"
 
 
-# ─────────────────────────────────────────────
-# Streamlit UI
-# ─────────────────────────────────────────────
+# ─────────────────────────────
+# UI
+# ─────────────────────────────
 st.set_page_config(page_title="ESP8266 Remote Control", layout="wide")
 
 st.title("ESP8266 8-Pin Remote Control")
@@ -116,8 +121,6 @@ for i, pin in enumerate(PINS):
                 st.session_state.client.publish(TOPICS[pin], cmd)
 
             st.session_state.status = f"{pin} turned {cmd}"
-
-            st.rerun()
 
 st.markdown("---")
 
