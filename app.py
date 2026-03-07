@@ -1,6 +1,6 @@
 import streamlit as st
 import paho.mqtt.client as mqtt
-from streamlit_autorefresh import st_autorefresh
+import time
 
 BROKER = "broker.hivemq.com"
 PORT = 1883
@@ -11,17 +11,17 @@ PINS = ["D0","D1","D2","D3","D4","D5","D6","D7"]
 
 TOPICS = {pin: f"ravi2025/home/{pin.lower()}/set" for pin in PINS}
 
-# auto refresh every 2 seconds
-st_autorefresh(interval=2000, key="mqtt_refresh")
-
 # ─────────────────────────────
-# Session variables
+# Session state initialization
 # ─────────────────────────────
 if "client" not in st.session_state:
     st.session_state.client = None
 
 if "status" not in st.session_state:
     st.session_state.status = "Connecting to MQTT..."
+
+if "last_refresh" not in st.session_state:
+    st.session_state.last_refresh = time.time()
 
 for pin in PINS:
     if pin not in st.session_state:
@@ -64,9 +64,11 @@ def on_message(client, userdata, msg):
 
     update_pin_states(message)
 
+    st.rerun()
+
 
 # ─────────────────────────────
-# MQTT connect once
+# Connect MQTT once
 # ─────────────────────────────
 if st.session_state.client is None:
 
@@ -89,7 +91,7 @@ if st.session_state.client is None:
 
 
 # ─────────────────────────────
-# UI
+# Streamlit UI
 # ─────────────────────────────
 st.set_page_config(page_title="ESP8266 Remote Control", layout="wide")
 
@@ -112,7 +114,6 @@ for i, pin in enumerate(PINS):
         if st.button(label, key=f"btn_{pin}", use_container_width=True):
 
             new_state = not state
-
             st.session_state[pin] = new_state
 
             cmd = "ON" if new_state else "OFF"
@@ -122,8 +123,18 @@ for i, pin in enumerate(PINS):
 
             st.session_state.status = f"{pin} turned {cmd}"
 
+            st.rerun()
+
 st.markdown("---")
 
 st.subheader("ESP8266 Status Message")
 
 st.code(st.session_state.status)
+
+
+# ─────────────────────────────
+# Auto refresh every 2 seconds
+# ─────────────────────────────
+if time.time() - st.session_state.last_refresh > 2:
+    st.session_state.last_refresh = time.time()
+    st.rerun()
