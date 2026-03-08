@@ -1,5 +1,7 @@
 import streamlit as st
 import paho.mqtt.client as mqtt
+from datetime import datetime, timedelta
+import time
 
 # ─────────────────────────────────────────────
 # Configuration
@@ -7,6 +9,7 @@ import paho.mqtt.client as mqtt
 BROKER = "broker.hivemq.com"
 PORT   = 1883
 TOPIC_STATUS = "ravi2025/home/status"
+TOPIC_STATUS_JSON = "ravi2025/home/status_json"  # ESP will publish JSON data here
 
 PINS = ["D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7"]
 TOPICS = {pin: f"ravi2025/home/{pin.lower()}/set" for pin in PINS}
@@ -17,24 +20,63 @@ TOPICS = {pin: f"ravi2025/home/{pin.lower()}/set" for pin in PINS}
 if "client" not in st.session_state:
     st.session_state.client = None
 
-if "status" not in st.session_state:
-    st.session_state.status = "Starting MQTT..."
+if "esp_status" not in st.session_state:
+    st.session_state.esp_status = "OFFLINE"
+
+if "wifi_rssi" not in st.session_state:
+    st.session_state.wifi_rssi = -100
+
+if "upload_time" not in st.session_state:
+    st.session_state.upload_time = None
+
+if "last_heartbeat" not in st.session_state:
+    st.session_state.last_heartbeat = None
+
+if "mqtt_status" not in st.session_state:
+    st.session_state.mqtt_status = "Starting MQTT..."
 
 for pin in PINS:
     if pin not in st.session_state:
         st.session_state[pin] = False   # default OFF
+
+# Heartbeat timeout (30 seconds)
+HEARTBEAT_TIMEOUT = 30
 
 # ─────────────────────────────────────────────
 # MQTT callbacks
 # ─────────────────────────────────────────────
 def on_connect(client, userdata, flags, rc):
     client.subscribe(TOPIC_STATUS)
-    st.session_state.status = "Connected to MQTT broker"
+    client.subscribe(TOPIC_STATUS_JSON)
+    st.session_state.mqtt_status = "✅ Connected to MQTT broker"
     st.rerun()
 
 def on_message(client, userdata, msg):
-    # You can enhance this part later to parse real pin states if ESP publishes them
-    st.session_state.status = msg.payload.decode()
+    payload = msg.payload.decode()
+    
+    if msg.topic == TOPIC_STATUS_JSON:
+        try:
+            # Parse JSON data from ESP8266: {"status":"ONLINE","rssi":-50,"uptime":12345}
+            import json
+            data = json.loads(payload)
+            st.session_state.esp_status = data.get("status", "OFFLINE")
+            st.session_state.wifi_rssi = data.get("rssi", -100)
+            st.session_state.upload_time = data.get("uptime", 0)
+            st.session_state.last_heartbeat = time.time()
+        except:
+            pass  # Invalid JSON, ignore
+    
+    elif msg.topic == TOPIC_STATUS:
+        st.session_state.esp_status = payload
+        st.session_state.last_heartbeat = time.time()
+
+# Check ESP8266 heartbeat
+def check_esp_online():
+    if st.session_state.last_heartbeat:
+        if time.time() - st.session_state.last_heartbeat > HEARTBEAT_TIMEOUT:
+            st.session_state.esp_status = "OFFLINE"
+            st.session_state.wifi_rssi = -100
+            st.session_state.upload_time = 0
     st.rerun()
 
 # ─────────────────────────────────────────────
@@ -50,45 +92,89 @@ if st.session_state.client is None:
         client.loop_start()
         st.session_state.client = client
     except Exception as e:
-        st.session_state.status = f"MQTT connection failed: {e}"
+        st.session_state.mqtt_status = f"❌ MQTT connection failed: {e}"
+
+# Check ESP status periodically
+if st.button("🔄 Check Status", key="check_status", help="Refresh ESP8266 status"):
+    check_esp_online()
 
 # ─────────────────────────────────────────────
 # Streamlit UI
 # ─────────────────────────────────────────────
 st.set_page_config(page_title="ESP8266 Remote Control", layout="wide")
 
-st.title("ESP8266 8-Pin Remote Control")
-st.caption("Status: " + st.session_state.status)
+st.title("🔌 ESP8266 8-Pin Remote Control")
+
+# Status dashboard
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    status_color = "🟢 ONLINE" if st.session_state.esp_status == "ONLINE" else "🔴 OFFLINE"
+    st.metric("ESP8266 Status", status_color)
+
+with col2:
+    rssi_bars = "📶" + "█" * max(0, int((st.session_state.wifi_rssi + 100) / 20)) if st.session_state.wifi_rssi > -100 else "📴"
+    st.metric("WiFi Signal", f"{st.session_state.wifi_rssi} dBm", help=rssi_bars)
+
+with col3:
+    uptime_str = f"{st.session_state.upload_time // 3600}h" if st.session_state.upload_time else "N/A"
+    st.metric("Uptime", uptime_str)
+
+with col4:
+    st.metric("MQTT", st.session_state.mqtt_status)
+
 st.markdown("---")
 
-# 4-column layout
+# 4-column layout for buttons
 cols = st.columns(4)
+esp_online = st.session_state.esp_status == "ONLINE"
 
 for i, pin in enumerate(PINS):
     with cols[i % 4]:
         is_on = st.session_state[pin]
         
-        # Visual toggle button
-        if st.button(
-            label = f"{pin}  {'🟢 ON' if is_on else '⚪ OFF'}",
-            key   = f"toggle_{pin}",
-            type  = "primary" if is_on else "secondary",
-            use_container_width = True,
-            help  = f"Click to turn {pin} {'OFF' if is_on else 'ON'}"
-        ):
-            # Toggle logic
-            new_state = not is_on
-            st.session_state[pin] = new_state
-            
-            command = "ON" if new_state else "OFF"
-            
-            if st.session_state.client:
-                st.session_state.client.publish(TOPICS[pin], command)
-            
-            st.session_state.status = f"Sent: {pin} → {command}"
-            st.rerun()
+        # Disable button if ESP is offline
+        if not esp_online:
+            st.button(
+                label=f"{pin} ❌ OFFLINE",
+                key=f"toggle_{pin}",
+                disabled=True,
+                use_container_width=True,
+                help="ESP8266 is OFFLINE. Connect power to enable controls."
+            )
+        else:
+            # Visual toggle button - enabled only when online
+            if st.button(
+                label=f"{pin} {'🟢 ON' if is_on else '⚪ OFF'}",
+                key=f"toggle_{pin}",
+                type="primary" if is_on else "secondary",
+                use_container_width=True,
+                help=f"Click to turn {pin} {'OFF' if is_on else 'ON'}"
+            ):
+                # Toggle logic
+                new_state = not is_on
+                st.session_state[pin] = new_state
+                
+                command = "ON" if new_state else "OFF"
+                
+                if st.session_state.client:
+                    st.session_state.client.publish(TOPICS[pin], command)
+                
+                st.session_state.mqtt_status = f"✅ Sent: {pin} → {command}"
+                st.rerun()
 
 st.markdown("---")
 
-st.subheader("Last ESP8266 message")
-st.code(st.session_state.status, language=None)
+# Debug info
+with st.expander("📊 Debug Info"):
+    st.json({
+        "ESP Status": st.session_state.esp_status,
+        "WiFi RSSI": st.session_state.wifi_rssi,
+        "Uptime (sec)": st.session_state.upload_time,
+        "Last Heartbeat": st.session_state.last_heartbeat,
+        "MQTT Status": st.session_state.mqtt_status
+    })
+
+# Auto-check ESP status every 5 seconds (hidden)
+time.sleep(0.1)  # Small delay to avoid too frequent reruns
+check_esp_online()
