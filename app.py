@@ -2,6 +2,9 @@ import streamlit as st
 import paho.mqtt.client as mqtt
 import time, json
 
+# ─────────────────────────────────────────────
+# Configuration
+# ─────────────────────────────────────────────
 BROKER = "broker.hivemq.com"
 PORT   = 1883
 TOPIC_STATUS = "ravi2025/home/status"
@@ -81,8 +84,8 @@ if st.session_state.client is None:
 st.set_page_config(page_title="ESP8266 Remote Control", layout="wide")
 st.title("🔌 ESP8266 8-Pin Remote Control")
 
-# Auto-refresh every 5 seconds
-st_autorefresh = st.experimental_autorefresh(interval=5000, limit=None, key="refresh")
+# Auto-refresh every 5 seconds (new API)
+st_autorefresh = st.autorefresh(interval=5000, limit=None, key="refresh")
 
 check_esp_online()
 
