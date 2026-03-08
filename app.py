@@ -1,104 +1,147 @@
-import streamlit as st
-import paho.mqtt.client as mqtt
+#include <ESP8266WiFi.h>
+#include <PubSubClient.h>
 
-# MQTT Broker
-BROKER = "broker.hivemq.com"
-PORT = 1883
+const char* ssid     = "Airtel_56";
+const char* password = "Raviuma5658";
 
-TOPIC_STATUS = "ravi2025/home/status"
+const char* mqtt_server = "broker.hivemq.com";
+const int mqtt_port = 1883;
 
-# ESP8266 pins
-PINS = ["D0","D1","D2","D3","D4","D5","D6","D7"]
+const char* topic_status = "ravi2025/home/status";
 
-# MQTT topics
-TOPICS = {pin: f"ravi2025/home/{pin.lower()}/set" for pin in PINS}
+const char* topic_d0 = "ravi2025/home/d0/set";
+const char* topic_d1 = "ravi2025/home/d1/set";
+const char* topic_d2 = "ravi2025/home/d2/set";
+const char* topic_d3 = "ravi2025/home/d3/set";
+const char* topic_d4 = "ravi2025/home/d4/set";
+const char* topic_d5 = "ravi2025/home/d5/set";
+const char* topic_d6 = "ravi2025/home/d6/set";
+const char* topic_d7 = "ravi2025/home/d7/set";
 
-# ─────────────────────────────────────────────
-# Session variables
-# ─────────────────────────────────────────────
-if "client" not in st.session_state:
-    st.session_state.client = None
+#define PIN_D0 D0
+#define PIN_D1 D1
+#define PIN_D2 D2
+#define PIN_D3 D3
+#define PIN_D4 D4
+#define PIN_D5 D5
+#define PIN_D6 D6
+#define PIN_D7 D7
 
-if "status" not in st.session_state:
-    st.session_state.status = "Starting MQTT..."
+WiFiClient espClient;
+PubSubClient client(espClient);
 
-# store pin states
-for pin in PINS:
-    if pin not in st.session_state:
-        st.session_state[pin] = False
+bool state[8] = {0,0,0,0,0,0,0,0};
 
+void publishStatus() {
 
-# ─────────────────────────────────────────────
-# MQTT callbacks
-# ─────────────────────────────────────────────
-def on_connect(client, userdata, flags, rc):
-    client.subscribe(TOPIC_STATUS)
-    st.session_state.status = "Connected to MQTT broker"
+  char msg[120];
 
+  sprintf(msg,
+  "D0=%s D1=%s D2=%s D3=%s D4=%s D5=%s D6=%s D7=%s",
+  state[0]?"ON":"OFF",
+  state[1]?"ON":"OFF",
+  state[2]?"ON":"OFF",
+  state[3]?"ON":"OFF",
+  state[4]?"ON":"OFF",
+  state[5]?"ON":"OFF",
+  state[6]?"ON":"OFF",
+  state[7]?"ON":"OFF"
+  );
 
-def on_message(client, userdata, msg):
-    st.session_state.status = msg.payload.decode()
-    st.rerun()
+  client.publish(topic_status,msg,true);
+}
 
+void setPin(int index,bool value){
 
-# ─────────────────────────────────────────────
-# Connect MQTT once
-# ─────────────────────────────────────────────
-if st.session_state.client is None:
+  int pins[8]={PIN_D0,PIN_D1,PIN_D2,PIN_D3,PIN_D4,PIN_D5,PIN_D6,PIN_D7};
 
-    client = mqtt.Client()
+  state[index]=value;
 
-    client.on_connect = on_connect
-    client.on_message = on_message
+  digitalWrite(pins[index],value?HIGH:LOW);
 
-    try:
-        client.connect(BROKER, PORT, 60)
-        client.loop_start()
-        st.session_state.client = client
-    except Exception as e:
-        st.session_state.status = f"MQTT Error: {e}"
+  publishStatus();
+}
 
+void callback(char* topic, byte* payload, unsigned int length) {
 
-# ─────────────────────────────────────────────
-# Streamlit UI
-# ─────────────────────────────────────────────
-st.set_page_config(page_title="ESP8266 Remote Control", layout="wide")
+  String msg;
 
-st.title("ESP8266 8-Pin Remote Control")
+  for(int i=0;i<length;i++)
+    msg+=(char)payload[i];
 
-st.write("Status:", st.session_state.status)
+  bool val=false;
 
-st.markdown("---")
+  if(msg=="ON") val=true;
+  else if(msg=="OFF") val=false;
+  else return;
 
-# Create 4 columns
-cols = st.columns(4)
+  String t=String(topic);
 
-# Buttons
-for i, pin in enumerate(PINS):
+  if(t==topic_d0) setPin(0,val);
+  if(t==topic_d1) setPin(1,val);
+  if(t==topic_d2) setPin(2,val);
+  if(t==topic_d3) setPin(3,val);
+  if(t==topic_d4) setPin(4,val);
+  if(t==topic_d5) setPin(5,val);
+  if(t==topic_d6) setPin(6,val);
+  if(t==topic_d7) setPin(7,val);
+}
 
-    with cols[i % 4]:
+void reconnect(){
 
-        state = st.session_state[pin]
+  while(!client.connected()){
 
-        label = f"{pin} : {'ON' if state else 'OFF'}"
+    String clientId="ESP8266-Ravi-"+String(random(0xffff),HEX);
 
-        if st.button(label, key=f"btn_{pin}", use_container_width=True):
+    if(client.connect(clientId.c_str())){
 
-            # toggle state
-            new_state = not state
-            st.session_state[pin] = new_state
+      client.subscribe(topic_d0);
+      client.subscribe(topic_d1);
+      client.subscribe(topic_d2);
+      client.subscribe(topic_d3);
+      client.subscribe(topic_d4);
+      client.subscribe(topic_d5);
+      client.subscribe(topic_d6);
+      client.subscribe(topic_d7);
 
-            command = "ON" if new_state else "OFF"
+      client.publish(topic_status,"ESP connected",true);
 
-            if st.session_state.client:
-                st.session_state.client.publish(TOPICS[pin], command)
+      publishStatus();
+    }
+    else
+    {
+      delay(5000);
+    }
+  }
+}
 
-            st.session_state.status = f"{pin} turned {command}"
+void setup(){
 
-            st.rerun()
+  Serial.begin(115200);
 
-st.markdown("---")
+  pinMode(PIN_D0,OUTPUT);
+  pinMode(PIN_D1,OUTPUT);
+  pinMode(PIN_D2,OUTPUT);
+  pinMode(PIN_D3,OUTPUT);
+  pinMode(PIN_D4,OUTPUT);
+  pinMode(PIN_D5,OUTPUT);
+  pinMode(PIN_D6,OUTPUT);
+  pinMode(PIN_D7,OUTPUT);
 
-st.subheader("ESP8266 Status")
-st.code(st.session_state.status)
+  WiFi.begin(ssid,password);
 
+  while(WiFi.status()!=WL_CONNECTED){
+    delay(500);
+  }
+
+  client.setServer(mqtt_server,mqtt_port);
+  client.setCallback(callback);
+}
+
+void loop(){
+
+  if(!client.connected())
+    reconnect();
+
+  client.loop();
+}
