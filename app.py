@@ -84,10 +84,9 @@ if st.session_state.client is None:
 st.set_page_config(page_title="ESP8266 Remote Control", layout="wide")
 st.title("🔌 ESP8266 8-Pin Remote Control")
 
-# Auto-refresh every 5 seconds (new API)
-st_autorefresh = st.autorefresh(interval=5000, limit=None, key="refresh")
-
-check_esp_online()
+# Manual refresh button
+if st.button("🔄 Refresh Status"):
+    check_esp_online()
 
 # Status dashboard
 col1, col2, col3, col4 = st.columns(4)
