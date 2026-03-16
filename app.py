@@ -7,7 +7,7 @@ import time
 # Configuration
 # ─────────────────────────────────────────────
 BROKER = "broker.hivemq.com"
-PORT   = 1883
+PORT = 1883
 TOPIC_STATUS = "ravi2025/home/status"
 TOPIC_STATUS_JSON = "ravi2025/home/status_json"
 
@@ -15,12 +15,11 @@ PINS = ["D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7"]
 TOPICS = {pin: f"ravi2025/home/{pin.lower()}/set" for pin in PINS}
 
 # ─────────────────────────────────────────────
-# Session state initialization - FIXED
+# Session state initialization
 # ─────────────────────────────────────────────
 if "client" not in st.session_state:
     st.session_state.client = None
 
-# FIXED: Initialize with better defaults
 if "esp_status" not in st.session_state:
     st.session_state.esp_status = "CONNECTING"
 
@@ -40,18 +39,22 @@ if "pin_states" not in st.session_state:
     st.session_state.pin_states = [False] * 8
 
 # Heartbeat timeout
-HEARTBEAT_TIMEOUT = 45  # Increased to 45s
+HEARTBEAT_TIMEOUT = 45
 
 # ─────────────────────────────────────────────
-# MQTT callbacks - FIXED
+# MQTT callbacks - NO st.rerun() in callbacks!
 # ─────────────────────────────────────────────
 def on_connect(client, userdata, flags, rc):
-    st.session_state.mqtt_status = "✅ MQTT Connected"
-    client.subscribe(TOPIC_STATUS)
-    client.subscribe(TOPIC_STATUS_JSON)
-    st.rerun()
+    """MQTT connection callback - NO Streamlit calls here"""
+    if rc == 0:
+        client.subscribe(TOPIC_STATUS)
+        client.subscribe(TOPIC_STATUS_JSON)
+        st.session_state.mqtt_status = "✅ MQTT Connected"
+    else:
+        st.session_state.mqtt_status = f"❌ MQTT Error: {rc}"
 
 def on_message(client, userdata, msg):
+    """MQTT message callback - ONLY update session state"""
     try:
         payload = msg.payload.decode()
         
@@ -62,34 +65,39 @@ def on_message(client, userdata, msg):
             st.session_state.upload_time = data.get("uptime", 0)
             st.session_state.last_heartbeat = time.time()
             
-            # FIXED: Update pin states from JSON
+            # Update pin states from JSON
             pins = data.get("pins", [0]*8)
             for i in range(8):
                 st.session_state.pin_states[i] = bool(pins[i])
                 
         elif msg.topic == TOPIC_STATUS:
-            # Handle simple status messages
             if "ONLINE" in payload or "connected" in payload:
                 st.session_state.esp_status = "ONLINE"
                 st.session_state.last_heartbeat = time.time()
                 
-        st.rerun()
-    except Exception as e:
-        pass  # Ignore parse errors
+    except Exception:
+        pass  # Silently ignore parse errors
 
-# Check ESP heartbeat - FIXED
+# Check ESP heartbeat
 def check_esp_online():
+    """Check if ESP is still online"""
     current_time = time.time()
     if st.session_state.last_heartbeat > 0:
         if current_time - st.session_state.last_heartbeat > HEARTBEAT_TIMEOUT:
             st.session_state.esp_status = "OFFLINE"
             st.session_state.wifi_rssi = -100
             st.session_state.upload_time = 0
-    st.rerun()
 
 # ─────────────────────────────────────────────
-# MQTT connection - FIXED with retry
+# Streamlit UI Setup
 # ─────────────────────────────────────────────
+st.set_page_config(page_title="ESP8266 Remote Control", layout="wide")
+st.title("🔌 ESP8266 8-Pin Remote Control")
+
+# ─────────────────────────────────────────────
+# MQTT Connection & Polling (Main Thread Only!)
+# ─────────────────────────────────────────────
+# Initialize MQTT client if needed
 if st.session_state.client is None:
     client = mqtt.Client()
     client.on_connect = on_connect
@@ -97,24 +105,25 @@ if st.session_state.client is None:
     
     try:
         client.connect(BROKER, PORT, 60)
-        client.loop_start()
         st.session_state.client = client
         st.session_state.mqtt_status = "🔄 Waiting for ESP..."
     except Exception as e:
-        st.session_state.mqtt_status = f"❌ MQTT Error: {e}"
+        st.session_state.mqtt_status = f"❌ MQTT Error: {str(e)}"
 
-# Force status check
+# CRITICAL: Non-blocking MQTT poll in MAIN THREAD only
+if st.session_state.client:
+    st.session_state.client.loop(timeout=0.01, max_packets=1)
+
+# Always check ESP status
+check_esp_online()
+
+# Force refresh button
 if st.button("🔄 Refresh Status", key="refresh", help="Force check ESP status"):
-    check_esp_online()
+    st.rerun()
 
 # ─────────────────────────────────────────────
-# Streamlit UI
+# Status Dashboard
 # ─────────────────────────────────────────────
-st.set_page_config(page_title="ESP8266 Remote Control", layout="wide")
-
-st.title("🔌 ESP8266 8-Pin Remote Control")
-
-# Status dashboard - FIXED layout
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
@@ -135,14 +144,15 @@ with col4:
 
 st.markdown("---")
 
-# Buttons - FIXED with actual pin states from ESP
+# ─────────────────────────────────────────────
+# Pin Control Buttons
+# ─────────────────────────────────────────────
 cols = st.columns(4)
 esp_online = st.session_state.esp_status == "ONLINE"
 
-pin_names = PINS
-for i, pin in enumerate(pin_names):
+for i, pin in enumerate(PINS):
     with cols[i % 4]:
-        is_on = st.session_state.pin_states[i]  # Use actual ESP state
+        is_on = st.session_state.pin_states[i]
         
         if not esp_online:
             st.button(
@@ -159,22 +169,28 @@ for i, pin in enumerate(pin_names):
                 use_container_width=True,
                 help=f"Toggle {pin}"
             ):
-                # Toggle and publish
+                # Toggle locally first
                 new_state = not is_on
                 st.session_state.pin_states[i] = new_state
                 
+                # Publish to ESP
                 command = "ON" if new_state else "OFF"
                 topic = TOPICS[pin]
                 
                 if st.session_state.client:
                     result = st.session_state.client.publish(topic, command)
-                    st.session_state.mqtt_status = f"✅ Sent {pin}={command}"
+                    if result.rc == 0:
+                        st.session_state.mqtt_status = f"✅ Sent {pin}={command}"
+                    else:
+                        st.session_state.mqtt_status = f"❌ Publish failed: {result.rc}"
                 
                 st.rerun()
 
 st.markdown("---")
 
-# Debug - FIXED display
+# ─────────────────────────────────────────────
+# Debug Info
+# ─────────────────────────────────────────────
 with st.expander("🔍 Debug Info"):
     st.json({
         "ESP Status": st.session_state.esp_status,
@@ -182,8 +198,6 @@ with st.expander("🔍 Debug Info"):
         "Uptime": st.session_state.upload_time,
         "Last Heartbeat": f"{time.time() - st.session_state.last_heartbeat:.1f}s ago" if st.session_state.last_heartbeat else "Never",
         "Pin States": st.session_state.pin_states,
-        "MQTT Status": st.session_state.mqtt_status
+        "MQTT Status": st.session_state.mqtt_status,
+        "Client Connected": st.session_state.client.is_connected() if st.session_state.client else False
     })
-
-# Auto refresh every 5 seconds
-check_esp_online()
