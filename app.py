@@ -44,12 +44,12 @@ def on_message(client, userdata, msg):
         payload = msg.payload.decode()
         if msg.topic == TOPIC_STATUS_JSON:
             data = json.loads(payload)
-            st.session_state.esp_status = "🟢 ONLINE"  # Real ESP data
+            st.session_state.esp_status = "🟢 ONLINE"
             st.session_state.wifi_rssi = data.get("rssi", -100)
             st.session_state.upload_time = data.get("uptime", 0)
             st.session_state.last_heartbeat = time.time()
             st.session_state.pin_states = [bool(x) for x in data.get("pins", [0]*8)]
-            st.session_state.test_active = False  # Disable test when real ESP talks
+            st.session_state.test_active = False
     except: pass
 
 def check_heartbeat():
@@ -83,17 +83,18 @@ else:
     except: pass
 
 # ─────────────────────────────────────────────
-# Status Row - CLEAR DISTINCTION
+# Status Row - ✅ FIXED METRIC
 # ─────────────────────────────────────────────
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     if st.session_state.test_active:
-        st.metric("ESP", "🧪 TEST MODE", "-60dBm", delta="SIMULATED")
+        st.metric("ESP", "🧪 TEST", "-60")  # ✅ Fixed: numeric delta
+        st.caption("SIMULATED")
     else:
         color = "🟢" if "ONLINE" in st.session_state.esp_status else "🔴"
         st.metric("ESP", st.session_state.esp_status, 
-                 f"{st.session_state.wifi_rssi}dBm")
+                 f"{st.session_state.wifi_rssi}")
 
 with col2:
     rssi = st.session_state.wifi_rssi
@@ -115,7 +116,7 @@ col_test1, col_test2 = st.columns(2)
 with col_test1:
     if st.button("🧪 START TEST", key="start_test"):
         st.session_state.test_active = True
-        st.session_state.esp_status = "🧪 TEST MODE"
+        st.session_state.esp_status = "🧪 TEST"
         st.session_state.wifi_rssi = -60
         st.session_state.upload_time = 3600
         st.session_state.last_heartbeat = time.time()
@@ -131,9 +132,18 @@ with col_test2:
 # Status Indicator
 status_col1, status_col2 = st.columns(2)
 with status_col1:
-    st.info(f"🔌 ESP: {'🟢 Real ESP' if 'ONLINE' in st.session_state.esp_status and not st.session_state.test_active else '🧪 Test Mode' if st.session_state.test_active else '🔴 Offline'}")
+    if st.session_state.test_active:
+        st.success("🧪 TEST MODE ACTIVE")
+    elif "ONLINE" in st.session_state.esp_status:
+        st.success("🟢 REAL ESP8266 CONNECTED")
+    else:
+        st.error("🔌 ESP8266 OFFLINE")
+        
 with status_col2:
-    st.success("🌐 MQTT: Connected") if st.session_state.client and st.session_state.client.is_connected() else st.error("🌐 MQTT: Disconnected")
+    if st.session_state.client and st.session_state.client.is_connected():
+        st.success("🌐 MQTT CONNECTED")
+    else:
+        st.error("🌐 MQTT DISCONNECTED")
 
 st.markdown("---")
 
