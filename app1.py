@@ -1,147 +1,159 @@
-#include <ESP8266WiFi.h>
-#include <PubSubClient.h>
+import streamlit as st
+import paho.mqtt.client as mqtt
+import json
+import time
 
-const char* ssid     = "Airtel_56";
-const char* password = "Raviuma5658";
+# ─────────────────────────────────────────────
+# Configuration
+# ─────────────────────────────────────────────
+BROKER = "broker.hivemq.com"
+PORT = 1883
+TOPIC_STATUS = "ravi2025/home/status"
+TOPIC_STATUS_JSON = "ravi2025/home/status_json"
 
-const char* mqtt_server = "broker.hivemq.com";
-const int mqtt_port = 1883;
+PINS = ["D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7"]
+TOPICS = {pin: f"ravi2025/home/{pin.lower()}/set" for pin in PINS}
 
-const char* topic_status = "ravi2025/home/status";
+# ─────────────────────────────────────────────
+# Session State
+# ─────────────────────────────────────────────
+if "client" not in st.session_state: st.session_state.client = None
+if "esp_status" not in st.session_state: st.session_state.esp_status = "OFFLINE"
+if "wifi_rssi" not in st.session_state: st.session_state.wifi_rssi = -100
+if "upload_time" not in st.session_state: st.session_state.upload_time = 0
+if "last_heartbeat" not in st.session_state: st.session_state.last_heartbeat = 0
+if "mqtt_status" not in st.session_state: st.session_state.mqtt_status = "🔄 Connecting"
+if "pin_states" not in st.session_state: st.session_state.pin_states = [False] * 8
 
-const char* topic_d0 = "ravi2025/home/d0/set";
-const char* topic_d1 = "ravi2025/home/d1/set";
-const char* topic_d2 = "ravi2025/home/d2/set";
-const char* topic_d3 = "ravi2025/home/d3/set";
-const char* topic_d4 = "ravi2025/home/d4/set";
-const char* topic_d5 = "ravi2025/home/d5/set";
-const char* topic_d6 = "ravi2025/home/d6/set";
-const char* topic_d7 = "ravi2025/home/d7/set";
+HEARTBEAT_TIMEOUT = 45
 
-#define PIN_D0 D0
-#define PIN_D1 D1
-#define PIN_D2 D2
-#define PIN_D3 D3
-#define PIN_D4 D4
-#define PIN_D5 D5
-#define PIN_D6 D6
-#define PIN_D7 D7
+# ─────────────────────────────────────────────
+# MQTT Functions
+# ─────────────────────────────────────────────
+def on_connect(client, userdata, flags, rc):
+    if rc == 0:
+        client.subscribe(TOPIC_STATUS)
+        client.subscribe(TOPIC_STATUS_JSON)
+        st.session_state.mqtt_status = "✅ Connected"
+    else:
+        st.session_state.mqtt_status = f"❌ RC:{rc}"
 
-WiFiClient espClient;
-PubSubClient client(espClient);
+def on_message(client, userdata, msg):
+    try:
+        payload = msg.payload.decode()
+        if msg.topic == TOPIC_STATUS_JSON:
+            data = json.loads(payload)
+            st.session_state.esp_status = data.get("status", "OFFLINE")
+            st.session_state.wifi_rssi = data.get("rssi", -100)
+            st.session_state.upload_time = data.get("uptime", 0)
+            st.session_state.last_heartbeat = time.time()
+            st.session_state.pin_states = [bool(x) for x in data.get("pins", [0]*8)]
+        elif "ONLINE" in payload.upper():
+            st.session_state.esp_status = "ONLINE"
+            st.session_state.last_heartbeat = time.time()
+    except: pass
 
-bool state[8] = {0,0,0,0,0,0,0,0};
+def check_heartbeat():
+    if st.session_state.last_heartbeat > 0:
+        if time.time() - st.session_state.last_heartbeat > HEARTBEAT_TIMEOUT:
+            st.session_state.esp_status = "OFFLINE"
+            st.session_state.wifi_rssi = -100
 
-void publishStatus() {
+# ─────────────────────────────────────────────
+# Page Setup
+# ─────────────────────────────────────────────
+st.set_page_config(page_title="ESP8266 Control", layout="wide")
+st.title("🔌 ESP8266 Remote Control")
 
-  char msg[120];
+check_heartbeat()
 
-  sprintf(msg,
-  "D0=%s D1=%s D2=%s D3=%s D4=%s D5=%s D6=%s D7=%s",
-  state[0]?"ON":"OFF",
-  state[1]?"ON":"OFF",
-  state[2]?"ON":"OFF",
-  state[3]?"ON":"OFF",
-  state[4]?"ON":"OFF",
-  state[5]?"ON":"OFF",
-  state[6]?"ON":"OFF",
-  state[7]?"ON":"OFF"
-  );
+# MQTT Setup
+if st.session_state.client is None:
+    client = mqtt.Client()
+    client.on_connect = on_connect
+    client.on_message = on_message
+    try:
+        client.connect(BROKER, PORT, 60)
+        client.loop(timeout=1.0)
+        st.session_state.client = client
+        st.session_state.mqtt_status = "✅ Ready"
+    except Exception as e:
+        st.session_state.mqtt_status = f"❌ {e}"
+else:
+    try:
+        st.session_state.client.loop(timeout=0.1)
+    except: pass
 
-  client.publish(topic_status,msg,true);
-}
+# Refresh button
+if st.button("🔄 Refresh", key="refresh"): st.rerun()
 
-void setPin(int index,bool value){
+# ─────────────────────────────────────────────
+# Status Row
+# ─────────────────────────────────────────────
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    color = "🟢" if st.session_state.esp_status == "ONLINE" else "🔴"
+    st.metric("ESP", f"{color} {st.session_state.esp_status}")
 
-  int pins[8]={PIN_D0,PIN_D1,PIN_D2,PIN_D3,PIN_D4,PIN_D5,PIN_D6,PIN_D7};
+with col2:
+    rssi = st.session_state.wifi_rssi
+    bars = "█" * max(0, int((rssi + 100) / 20))
+    st.metric("WiFi", f"{rssi}dBm", help=bars)
 
-  state[index]=value;
+with col3:
+    uptime = f"{st.session_state.upload_time//3600}h"
+    st.metric("Uptime", uptime)
 
-  digitalWrite(pins[index],value?HIGH:LOW);
+with col4:
+    st.metric("MQTT", st.session_state.mqtt_status)
 
-  publishStatus();
-}
+st.markdown("---")
 
-void callback(char* topic, byte* payload, unsigned int length) {
+# TEST Button - Force ESP Online
+if st.button("🧪 TEST MODE (Force Online)", key="test_mode"):
+    st.session_state.esp_status = "ONLINE"
+    st.session_state.wifi_rssi = -60
+    st.session_state.pin_states = [i%2==0 for i in range(8)]
+    st.session_state.last_heartbeat = time.time()
+    st.rerun()
 
-  String msg;
+# ─────────────────────────────────────────────
+# Pin Buttons
+# ─────────────────────────────────────────────
+cols = st.columns(4)
+esp_online = st.session_state.esp_status == "ONLINE"
 
-  for(int i=0;i<length;i++)
-    msg+=(char)payload[i];
+for i, pin in enumerate(PINS):
+    with cols[i % 4]:
+        is_on = st.session_state.pin_states[i]
+        if not esp_online:
+            st.button(f"{pin}\n❌", disabled=True, use_container_width=True)
+        else:
+            if st.button(
+                f"{pin}\n{'🟢' if is_on else '⚪'}",
+                key=f"btn_{i}",
+                type="primary" if is_on else "secondary",
+                use_container_width=True
+            ):
+                st.session_state.pin_states[i] = not is_on
+                cmd = "ON" if st.session_state.pin_states[i] else "OFF"
+                topic = TOPICS[pin]
+                
+                if st.session_state.client:
+                    result = st.session_state.client.publish(topic, cmd)
+                    st.session_state.mqtt_status = f"✅ {pin}={cmd}"
+                st.rerun()
 
-  bool val=false;
+st.markdown("---")
 
-  if(msg=="ON") val=true;
-  else if(msg=="OFF") val=false;
-  else return;
-
-  String t=String(topic);
-
-  if(t==topic_d0) setPin(0,val);
-  if(t==topic_d1) setPin(1,val);
-  if(t==topic_d2) setPin(2,val);
-  if(t==topic_d3) setPin(3,val);
-  if(t==topic_d4) setPin(4,val);
-  if(t==topic_d5) setPin(5,val);
-  if(t==topic_d6) setPin(6,val);
-  if(t==topic_d7) setPin(7,val);
-}
-
-void reconnect(){
-
-  while(!client.connected()){
-
-    String clientId="ESP8266-Ravi-"+String(random(0xffff),HEX);
-
-    if(client.connect(clientId.c_str())){
-
-      client.subscribe(topic_d0);
-      client.subscribe(topic_d1);
-      client.subscribe(topic_d2);
-      client.subscribe(topic_d3);
-      client.subscribe(topic_d4);
-      client.subscribe(topic_d5);
-      client.subscribe(topic_d6);
-      client.subscribe(topic_d7);
-
-      client.publish(topic_status,"ESP connected",true);
-
-      publishStatus();
-    }
-    else
-    {
-      delay(5000);
-    }
-  }
-}
-
-void setup(){
-
-  Serial.begin(115200);
-
-  pinMode(PIN_D0,OUTPUT);
-  pinMode(PIN_D1,OUTPUT);
-  pinMode(PIN_D2,OUTPUT);
-  pinMode(PIN_D3,OUTPUT);
-  pinMode(PIN_D4,OUTPUT);
-  pinMode(PIN_D5,OUTPUT);
-  pinMode(PIN_D6,OUTPUT);
-  pinMode(PIN_D7,OUTPUT);
-
-  WiFi.begin(ssid,password);
-
-  while(WiFi.status()!=WL_CONNECTED){
-    delay(500);
-  }
-
-  client.setServer(mqtt_server,mqtt_port);
-  client.setCallback(callback);
-}
-
-void loop(){
-
-  if(!client.connected())
-    reconnect();
-
-  client.loop();
-}
+# Debug
+with st.expander("🔍 Debug Info"):
+    st.json({
+        "ESP": st.session_state.esp_status,
+        "RSSI": st.session_state.wifi_rssi,
+        "Uptime": st.session_state.upload_time,
+        "Heartbeat": f"{time.time()-st.session_state.last_heartbeat:.0f}s ago",
+        "Pins": st.session_state.pin_states,
+        "MQTT": st.session_state.mqtt_status,
+        "Connected": st.session_state.client.is_connected() if st.session_state.client else False
+    })
