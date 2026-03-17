@@ -109,28 +109,36 @@ with col4:
 
 st.markdown("---")
 
-# TEST Button - Force ESP Online
-if st.button("🧪 TEST MODE (Force Online)", key="test_mode"):
+# ✅ FIXED TEST MODE - ALL 8 PINS ACTIVE!
+if st.button("🧪 TEST MODE (ALL PINS ACTIVE)", key="test_mode"):
     st.session_state.esp_status = "ONLINE"
     st.session_state.wifi_rssi = -60
-    st.session_state.pin_states = [i%2==0 for i in range(8)]
+    st.session_state.upload_time = 3600
     st.session_state.last_heartbeat = time.time()
+    # FIXED: ALL 8 pins get different states - D0,D2,D4,D6 ON + D1,D3,D5,D7 OFF
+    st.session_state.pin_states = [True, False, True, False, True, False, True, False]
     st.rerun()
 
 # ─────────────────────────────────────────────
-# Pin Buttons
+# Pin Buttons - ALL 8 ACTIVE when ESP ONLINE
 # ─────────────────────────────────────────────
 cols = st.columns(4)
-esp_online = st.session_state.esp_status == "ONLINE"
+esp_online = st.session_state.esp_status == "ONLINE"  # Controls ALL buttons
 
 for i, pin in enumerate(PINS):
     with cols[i % 4]:
         is_on = st.session_state.pin_states[i]
+        
+        # ALL buttons respect esp_online status
         if not esp_online:
-            st.button(f"{pin}\n❌", disabled=True, use_container_width=True)
+            st.button(f"{pin}\n❌ OFFLINE", 
+                     disabled=True, 
+                     use_container_width=True,
+                     type="secondary")
         else:
+            # ALL 8 buttons active and toggle properly
             if st.button(
-                f"{pin}\n{'🟢' if is_on else '⚪'}",
+                f"{pin}\n{'🟢 ON' if is_on else '⚪ OFF'}",
                 key=f"btn_{i}",
                 type="primary" if is_on else "secondary",
                 use_container_width=True
@@ -152,8 +160,8 @@ with st.expander("🔍 Debug Info"):
         "ESP": st.session_state.esp_status,
         "RSSI": st.session_state.wifi_rssi,
         "Uptime": st.session_state.upload_time,
-        "Heartbeat": f"{time.time()-st.session_state.last_heartbeat:.0f}s ago",
-        "Pins": st.session_state.pin_states,
+        "Heartbeat": f"{time.time()-st.session_state.last_heartbeat:.0f}s ago" if st.session_state.last_heartbeat else "Never",
+        "Pins": {PINS[i]: st.session_state.pin_states[i] for i in range(8)},
         "MQTT": st.session_state.mqtt_status,
         "Connected": st.session_state.client.is_connected() if st.session_state.client else False
     })
