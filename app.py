@@ -24,6 +24,7 @@ if "upload_time" not in st.session_state: st.session_state.upload_time = 0
 if "last_heartbeat" not in st.session_state: st.session_state.last_heartbeat = 0
 if "mqtt_status" not in st.session_state: st.session_state.mqtt_status = "🔄 Connecting"
 if "pin_states" not in st.session_state: st.session_state.pin_states = [False] * 8
+if "test_mode" not in st.session_state: st.session_state.test_mode = False
 
 HEARTBEAT_TIMEOUT = 45
 
@@ -34,9 +35,9 @@ def on_connect(client, userdata, flags, rc):
     if rc == 0:
         client.subscribe(TOPIC_STATUS)
         client.subscribe(TOPIC_STATUS_JSON)
-        st.session_state.mqtt_status = "✅ Connected"
+        st.session_state.mqtt_status = "✅ MQTT Broker Connected"
     else:
-        st.session_state.mqtt_status = f"❌ RC:{rc}"
+        st.session_state.mqtt_status = f"❌ MQTT RC:{rc}"
 
 def on_message(client, userdata, msg):
     try:
@@ -48,13 +49,15 @@ def on_message(client, userdata, msg):
             st.session_state.upload_time = data.get("uptime", 0)
             st.session_state.last_heartbeat = time.time()
             st.session_state.pin_states = [bool(x) for x in data.get("pins", [0]*8)]
+            st.session_state.test_mode = False  # Real ESP data clears test mode
         elif "ONLINE" in payload.upper():
             st.session_state.esp_status = "ONLINE"
             st.session_state.last_heartbeat = time.time()
+            st.session_state.test_mode = False
     except: pass
 
 def check_heartbeat():
-    if st.session_state.last_heartbeat > 0:
+    if st.session_state.last_heartbeat > 0 and not st.session_state.test_mode:
         if time.time() - st.session_state.last_heartbeat > HEARTBEAT_TIMEOUT:
             st.session_state.esp_status = "OFFLINE"
             st.session_state.wifi_rssi = -100
@@ -76,7 +79,7 @@ if st.session_state.client is None:
         client.connect(BROKER, PORT, 60)
         client.loop(timeout=1.0)
         st.session_state.client = client
-        st.session_state.mqtt_status = "✅ Ready"
+        st.session_state.mqtt_status = "✅ MQTT Ready"
     except Exception as e:
         st.session_state.mqtt_status = f"❌ {e}"
 else:
@@ -88,12 +91,13 @@ else:
 if st.button("🔄 Refresh", key="refresh"): st.rerun()
 
 # ─────────────────────────────────────────────
-# Status Row
+# Status Row - FIXED DISPLAY
 # ─────────────────────────────────────────────
 col1, col2, col3, col4 = st.columns(4)
 with col1:
     color = "🟢" if st.session_state.esp_status == "ONLINE" else "🔴"
-    st.metric("ESP", f"{color} {st.session_state.esp_status}")
+    status_text = "ONLINE (TEST)" if st.session_state.test_mode else st.session_state.esp_status
+    st.metric("ESP", f"{color} {status_text}")
 
 with col2:
     rssi = st.session_state.wifi_rssi
@@ -105,38 +109,44 @@ with col3:
     st.metric("Uptime", uptime)
 
 with col4:
+    mqtt_text = "✅ MQTT OK" if st.session_state.client and st.session_state.client.is_connected() else "❌ MQTT Down"
     st.metric("MQTT", st.session_state.mqtt_status)
 
 st.markdown("---")
 
-# ✅ FIXED TEST MODE - ALL 8 PINS ACTIVE!
-if st.button("🧪 TEST MODE (ALL PINS ACTIVE)", key="test_mode"):
-    st.session_state.esp_status = "ONLINE"
-    st.session_state.wifi_rssi = -60
-    st.session_state.upload_time = 3600
-    st.session_state.last_heartbeat = time.time()
-    # FIXED: ALL 8 pins get different states - D0,D2,D4,D6 ON + D1,D3,D5,D7 OFF
-    st.session_state.pin_states = [True, False, True, False, True, False, True, False]
-    st.rerun()
+# FIXED Test Mode Button
+col_test1, col_test2 = st.columns(2)
+with col_test1:
+    if st.button("🧪 TEST MODE", key="test_mode"):
+        st.session_state.test_mode = True
+        st.session_state.esp_status = "ONLINE"
+        st.session_state.wifi_rssi = -60
+        st.session_state.upload_time = 3600
+        st.session_state.last_heartbeat = time.time()
+        st.session_state.pin_states = [True, False, True, False, True, False, True, False]
+        st.rerun()
+
+with col_test2:
+    if st.button("🔄 REAL MODE", key="real_mode"):
+        st.session_state.test_mode = False
+        st.rerun()
 
 # ─────────────────────────────────────────────
-# Pin Buttons - ALL 8 ACTIVE when ESP ONLINE
+# Pin Buttons
 # ─────────────────────────────────────────────
 cols = st.columns(4)
-esp_online = st.session_state.esp_status == "ONLINE"  # Controls ALL buttons
+# Pins active if ESP online OR test mode
+esp_active = st.session_state.esp_status == "ONLINE" or st.session_state.test_mode
 
 for i, pin in enumerate(PINS):
     with cols[i % 4]:
         is_on = st.session_state.pin_states[i]
         
-        # ALL buttons respect esp_online status
-        if not esp_online:
+        if not esp_active:
             st.button(f"{pin}\n❌ OFFLINE", 
                      disabled=True, 
-                     use_container_width=True,
-                     type="secondary")
+                     use_container_width=True)
         else:
-            # ALL 8 buttons active and toggle properly
             if st.button(
                 f"{pin}\n{'🟢 ON' if is_on else '⚪ OFF'}",
                 key=f"btn_{i}",
@@ -147,21 +157,22 @@ for i, pin in enumerate(PINS):
                 cmd = "ON" if st.session_state.pin_states[i] else "OFF"
                 topic = TOPICS[pin]
                 
-                if st.session_state.client:
+                if st.session_state.client and st.session_state.client.is_connected():
                     result = st.session_state.client.publish(topic, cmd)
                     st.session_state.mqtt_status = f"✅ {pin}={cmd}"
                 st.rerun()
 
 st.markdown("---")
 
-# Debug
+# FIXED Debug - Accurate Status
 with st.expander("🔍 Debug Info"):
     st.json({
-        "ESP": st.session_state.esp_status,
+        "ESP": st.session_state.esp_status + (" (TEST)" if st.session_state.test_mode else ""),
         "RSSI": st.session_state.wifi_rssi,
         "Uptime": st.session_state.upload_time,
         "Heartbeat": f"{time.time()-st.session_state.last_heartbeat:.0f}s ago" if st.session_state.last_heartbeat else "Never",
+        "Test Mode": st.session_state.test_mode,
         "Pins": {PINS[i]: st.session_state.pin_states[i] for i in range(8)},
-        "MQTT": st.session_state.mqtt_status,
-        "Connected": st.session_state.client.is_connected() if st.session_state.client else False
+        "MQTT Broker": "✅ Connected" if st.session_state.client and st.session_state.client.is_connected() else "❌ Disconnected",
+        "MQTT Status": st.session_state.mqtt_status
     })
