@@ -2,7 +2,6 @@ import streamlit as st
 import paho.mqtt.client as mqtt
 import json
 import time
-import threading
 
 # ─────────────────────────────────────────────
 # Configuration
@@ -16,128 +15,93 @@ PINS = ["D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7"]
 TOPICS = {pin: f"ravi2025/home/{pin.lower()}/set" for pin in PINS}
 
 # ─────────────────────────────────────────────
-# Session state initialization
+# Session State
 # ─────────────────────────────────────────────
-if "client" not in st.session_state:
-    st.session_state.client = None
+if "client" not in st.session_state: st.session_state.client = None
+if "esp_status" not in st.session_state: st.session_state.esp_status = "OFFLINE"
+if "wifi_rssi" not in st.session_state: st.session_state.wifi_rssi = -100
+if "upload_time" not in st.session_state: st.session_state.upload_time = 0
+if "last_heartbeat" not in st.session_state: st.session_state.last_heartbeat = 0
+if "mqtt_status" not in st.session_state: st.session_state.mqtt_status = "🔄 Connecting"
+if "pin_states" not in st.session_state: st.session_state.pin_states = [False] * 8
 
-if "esp_status" not in st.session_state:
-    st.session_state.esp_status = "CONNECTING"
-
-if "wifi_rssi" not in st.session_state:
-    st.session_state.wifi_rssi = -100
-
-if "upload_time" not in st.session_state:
-    st.session_state.upload_time = 0
-
-if "last_heartbeat" not in st.session_state:
-    st.session_state.last_heartbeat = 0
-
-if "mqtt_status" not in st.session_state:
-    st.session_state.mqtt_status = "🔄 Connecting..."
-
-if "pin_states" not in st.session_state:
-    st.session_state.pin_states = [False] * 8
-
-# Heartbeat timeout
 HEARTBEAT_TIMEOUT = 45
 
 # ─────────────────────────────────────────────
-# MQTT callbacks - Safe for background threads
+# MQTT Functions
 # ─────────────────────────────────────────────
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         client.subscribe(TOPIC_STATUS)
         client.subscribe(TOPIC_STATUS_JSON)
-        st.session_state.mqtt_status = "✅ MQTT Connected"
+        st.session_state.mqtt_status = "✅ Connected"
     else:
-        st.session_state.mqtt_status = f"❌ MQTT RC: {rc}"
+        st.session_state.mqtt_status = f"❌ RC:{rc}"
 
 def on_message(client, userdata, msg):
     try:
         payload = msg.payload.decode()
-        
         if msg.topic == TOPIC_STATUS_JSON:
             data = json.loads(payload)
             st.session_state.esp_status = data.get("status", "OFFLINE")
             st.session_state.wifi_rssi = data.get("rssi", -100)
             st.session_state.upload_time = data.get("uptime", 0)
             st.session_state.last_heartbeat = time.time()
-            
-            pins = data.get("pins", [0]*8)
-            for i in range(8):
-                st.session_state.pin_states[i] = bool(pins[i])
-                
-        elif msg.topic == TOPIC_STATUS:
-            if "ONLINE" in payload.upper():
-                st.session_state.esp_status = "ONLINE"
-                st.session_state.last_heartbeat = time.time()
-                
-    except:
-        pass
+            st.session_state.pin_states = [bool(x) for x in data.get("pins", [0]*8)]
+        elif "ONLINE" in payload.upper():
+            st.session_state.esp_status = "ONLINE"
+            st.session_state.last_heartbeat = time.time()
+    except: pass
 
-def check_esp_online():
-    current_time = time.time()
+def check_heartbeat():
     if st.session_state.last_heartbeat > 0:
-        if current_time - st.session_state.last_heartbeat > HEARTBEAT_TIMEOUT:
+        if time.time() - st.session_state.last_heartbeat > HEARTBEAT_TIMEOUT:
             st.session_state.esp_status = "OFFLINE"
             st.session_state.wifi_rssi = -100
-            st.session_state.upload_time = 0
 
 # ─────────────────────────────────────────────
-# Streamlit UI Setup
+# Page Setup
 # ─────────────────────────────────────────────
-st.set_page_config(page_title="ESP8266 Remote Control", layout="wide")
-st.title("🔌 ESP8266 8-Pin Remote Control")
+st.set_page_config(page_title="ESP8266 Control", layout="wide")
+st.title("🔌 ESP8266 Remote Control")
 
-check_esp_online()
+check_heartbeat()
 
-# Force refresh
-if st.button("🔄 Refresh", key="refresh"):
-    st.rerun()
-
-# ─────────────────────────────────────────────
-# MQTT Connection - FIXED!
-# ─────────────────────────────────────────────
+# MQTT Setup
 if st.session_state.client is None:
+    client = mqtt.Client()
+    client.on_connect = on_connect
+    client.on_message = on_message
     try:
-        client = mqtt.Client()
-        client.on_connect = on_connect
-        client.on_message = on_message
-        
-        # Connect synchronously first
         client.connect(BROKER, PORT, 60)
-        client.loop(timeout=2.0)  # ✅ CORRECT: only 'timeout' parameter [web:39]
-        
-        if client.is_connected():
-            st.session_state.client = client
-            st.session_state.mqtt_status = "✅ MQTT Ready"
-        else:
-            st.session_state.mqtt_status = "❌ MQTT Connect Failed"
-            
+        client.loop(timeout=1.0)
+        st.session_state.client = client
+        st.session_state.mqtt_status = "✅ Ready"
     except Exception as e:
-        st.session_state.mqtt_status = f"❌ Error: {str(e)}"
+        st.session_state.mqtt_status = f"❌ {e}"
 else:
-    # Keep connection alive with short non-blocking loops
     try:
-        st.session_state.client.loop(timeout=0.1)  # ✅ No max_packets!
-    except:
-        pass
+        st.session_state.client.loop(timeout=0.1)
+    except: pass
 
-# Status dashboard
+# Refresh button
+if st.button("🔄 Refresh", key="refresh"): st.rerun()
+
+# ─────────────────────────────────────────────
+# Status Row
+# ─────────────────────────────────────────────
 col1, col2, col3, col4 = st.columns(4)
-
 with col1:
     color = "🟢" if st.session_state.esp_status == "ONLINE" else "🔴"
-    st.metric("ESP Status", f"{color} {st.session_state.esp_status}")
+    st.metric("ESP", f"{color} {st.session_state.esp_status}")
 
 with col2:
     rssi = st.session_state.wifi_rssi
-    bars = "█" * max(0, int((rssi + 100) / 20)) if rssi > -100 else ""
-    st.metric("WiFi", f"{rssi} dBm", help=f"📶{bars}")
+    bars = "█" * max(0, int((rssi + 100) / 20))
+    st.metric("WiFi", f"{rssi}dBm", help=bars)
 
 with col3:
-    uptime = f"{st.session_state.upload_time//3600:.0f}h" if st.session_state.upload_time else "0s"
+    uptime = f"{st.session_state.upload_time//3600}h"
     st.metric("Uptime", uptime)
 
 with col4:
@@ -145,44 +109,51 @@ with col4:
 
 st.markdown("---")
 
-# Pin buttons
+# TEST Button - Force ESP Online
+if st.button("🧪 TEST MODE (Force Online)", key="test_mode"):
+    st.session_state.esp_status = "ONLINE"
+    st.session_state.wifi_rssi = -60
+    st.session_state.pin_states = [i%2==0 for i in range(8)]
+    st.session_state.last_heartbeat = time.time()
+    st.rerun()
+
+# ─────────────────────────────────────────────
+# Pin Buttons
+# ─────────────────────────────────────────────
 cols = st.columns(4)
 esp_online = st.session_state.esp_status == "ONLINE"
 
 for i, pin in enumerate(PINS):
     with cols[i % 4]:
         is_on = st.session_state.pin_states[i]
-        
         if not esp_online:
-            st.button(f"{pin} ❌", key=f"btn_{pin}", disabled=True, use_container_width=True)
+            st.button(f"{pin}\n❌", disabled=True, use_container_width=True)
         else:
             if st.button(
-                f"{pin} {'🟢 ON' if is_on else '⚪ OFF'}",
-                key=f"toggle_{pin}",
+                f"{pin}\n{'🟢' if is_on else '⚪'}",
+                key=f"btn_{i}",
                 type="primary" if is_on else "secondary",
                 use_container_width=True
             ):
-                new_state = not is_on
-                st.session_state.pin_states[i] = new_state
-                
-                command = "ON" if new_state else "OFF"
+                st.session_state.pin_states[i] = not is_on
+                cmd = "ON" if st.session_state.pin_states[i] else "OFF"
                 topic = TOPICS[pin]
                 
-                if st.session_state.client and st.session_state.client.is_connected():
-                    result = st.session_state.client.publish(topic, command)
-                    st.session_state.mqtt_status = f"✅ {pin}={command}"
+                if st.session_state.client:
+                    result = st.session_state.client.publish(topic, cmd)
+                    st.session_state.mqtt_status = f"✅ {pin}={cmd}"
                 st.rerun()
 
 st.markdown("---")
 
 # Debug
-with st.expander("🔍 Debug"):
+with st.expander("🔍 Debug Info"):
     st.json({
-        "ESP Status": st.session_state.esp_status,
-        "WiFi RSSI": st.session_state.wifi_rssi,
+        "ESP": st.session_state.esp_status,
+        "RSSI": st.session_state.wifi_rssi,
         "Uptime": st.session_state.upload_time,
-        "Last Heartbeat": f"{time.time() - st.session_state.last_heartbeat:.1f}s ago" if st.session_state.last_heartbeat else "Never",
-        "Pin States": st.session_state.pin_states,
-        "MQTT Status": st.session_state.mqtt_status,
-        "Client": "Connected" if st.session_state.client and st.session_state.client.is_connected() else "Disconnected"
+        "Heartbeat": f"{time.time()-st.session_state.last_heartbeat:.0f}s ago",
+        "Pins": st.session_state.pin_states,
+        "MQTT": st.session_state.mqtt_status,
+        "Connected": st.session_state.client.is_connected() if st.session_state.client else False
     })
